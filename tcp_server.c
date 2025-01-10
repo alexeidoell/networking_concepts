@@ -17,7 +17,7 @@
 #define BACKLOG 10   // how many pending connections queue will hold
 #define MAXDATASIZE 100 // max number of bytes we can get at once 
 
-void sigchld_handler(int s)
+void sigchld_handler(int s __attribute__((unused)))
 {
     // waitpid() might overwrite errno, so we save and restore it:
     int saved_errno = errno;
