@@ -1,6 +1,7 @@
 // Alexei Doell cka067 11345642
 
 #include <caesar.h>
+#include <ctype.h>
 #include <stdio.h>
 
 int cipher(char *str, size_t len) {
@@ -9,7 +10,7 @@ int cipher(char *str, size_t len) {
         return -1;
     }
 
-    char curr;
+    unsigned char curr;
 
     for (size_t i = 0; i < len; ++i) {
         curr = str[i];
@@ -27,12 +28,4 @@ int cipher(char *str, size_t len) {
         str[i] = curr;
     }
     return 0;
-}
-
-int main(void) {
-    char teststr[11];
-    strcpy(teststr, "Blah, blah");
-    cipher(teststr, strlen(teststr));
-
-    printf("%s\n", teststr);
 }
