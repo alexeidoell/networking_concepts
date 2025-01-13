@@ -11,7 +11,7 @@
 
 #include <arpa/inet.h>
 
-#define PORT "34921" // the port client will be connecting to 
+#define PORT "34920" // the port client will be connecting to 
 
 #define MAXDATASIZE 100 // max number of bytes we can get at once 
 
@@ -28,7 +28,8 @@ void *get_in_addr(struct sockaddr *sa)
 int main(int argc, char *argv[])
 {
     int sockfd;
-    ssize_t num_bytes;
+    int32_t num_bytes;
+    ssize_t recvstatus;
     char buf[MAXDATASIZE];
     struct addrinfo hints, *servinfo, *p;
     int rv;
@@ -78,7 +79,7 @@ int main(int argc, char *argv[])
     freeaddrinfo(servinfo); // all done with this structure
 
     char* line = NULL;
-    ssize_t len = 0;
+    int32_t len = 0;
     size_t alloc = 0;
 
     while ((len = getline(&line, &alloc, stdin)) != EOF) {
@@ -86,12 +87,28 @@ int main(int argc, char *argv[])
             printf("client: closing program\n");
             goto cleanup;
         }
-        // need to check for MAXDATASIZE before sending
-        if (send(sockfd, line, len, 0) == -1) {
-            perror("send");
+        // send length of message first
+        int32_t networklen = htonl(len);
+        if (send(sockfd, &networklen, sizeof networklen, 0) == -1) {
+            perror("send: length");
             goto cleanup;
         }
-        num_bytes = recv(sockfd, buf, MAXDATASIZE-1, 0);
+        if (send(sockfd, line, len, 0) == -1) {
+            perror("send: buffer");
+            goto cleanup;
+        }
+        recvstatus = recv(sockfd, &len, sizeof len, 0);
+        switch (recvstatus) {
+            case -1:
+                perror("recv");
+                return_code = 1;
+                goto cleanup;
+            case 0:
+                printf("client: connection closed from server\n");
+                goto cleanup;
+        }
+        len = ntohl(len);
+        num_bytes = recv(sockfd, buf, len, 0);
         switch (num_bytes) {
             case -1:
                 perror("recv");

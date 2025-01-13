@@ -50,7 +50,7 @@ int main(void)
     int yes=1;
     char s[INET6_ADDRSTRLEN];
     int rv;
-    ssize_t num_bytes;
+    int32_t num_bytes;
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -123,8 +123,23 @@ int main(void)
         if (!fork()) { // this is the child process
             close(sockfd); // child doesn't need the listener
             char msg[MAXDATASIZE];
+            int32_t expected;
+            ssize_t recvstatus;
             while (1) {
-                num_bytes = recv(new_fd, msg, MAXDATASIZE-1, 0);
+                recvstatus = recv(new_fd, &expected, sizeof expected, 0);
+                expected = ntohl(expected);
+                switch (recvstatus) {
+                case -1:
+                    perror("recv");
+                    close(new_fd);
+                    exit(1);
+                case 0:
+                    printf("server: connection from %s closed\n", s);
+                    close(new_fd);
+                    exit(0);
+                }
+                num_bytes = recv(new_fd, msg, expected, 0);
+                int32_t networkbytes = htonl(num_bytes);
                 switch (num_bytes) {
                 case -1:
                     perror("recv");
@@ -135,7 +150,12 @@ int main(void)
                     close(new_fd);
                     exit(0);
                 default:
-                    cipher(msg, num_bytes);
+                    cipher(msg, expected);
+                    if (send(new_fd, &networkbytes, sizeof networkbytes, 0) == -1) {
+                        perror("send");
+                        close(new_fd);
+                        exit(1);
+                    }
                     if (send(new_fd, msg, num_bytes, 0) == -1) {
                         perror("send");
                         close(new_fd);
