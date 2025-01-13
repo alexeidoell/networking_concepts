@@ -169,7 +169,26 @@ int main(int argc, char *argv[])
             close(listenfd); // child doesn't need the listener
             char msg[MAXDATASIZE];
             while (1) {
+                // get msg from client
                 num_bytes = recv(new_fd, msg, MAXDATASIZE-1, 0);
+                switch (num_bytes) {
+                case -1:
+                    perror("recv");
+                    close(new_fd);
+                    exit(1);
+                case 0:
+                    printf("tcp proxy: connection from %s closed\n", s);
+                    close(new_fd);
+                    exit(0);
+                default:
+                    if (send(servfd, msg, num_bytes, 0) == -1) {
+                        perror("send");
+                        close(new_fd);
+                        exit(1);
+                    }
+                }
+                // get msg from server
+                num_bytes = recv(servfd, msg, MAXDATASIZE-1, 0);
                 switch (num_bytes) {
                 case -1:
                     perror("recv");
@@ -186,6 +205,7 @@ int main(int argc, char *argv[])
                         exit(1);
                     }
                 }
+
             }
         }
         close(new_fd);  // parent doesn't need this
