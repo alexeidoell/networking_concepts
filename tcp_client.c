@@ -1,7 +1,8 @@
+// Alexei Doell cka067 11345642
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <errno.h>
 #include <string.h>
 #include <netdb.h>
 #include <sys/types.h>
@@ -10,7 +11,7 @@
 
 #include <arpa/inet.h>
 
-#define PORT "34920" // the port client will be connecting to 
+#define PORT "34921" // the port client will be connecting to 
 
 #define MAXDATASIZE 100 // max number of bytes we can get at once 
 

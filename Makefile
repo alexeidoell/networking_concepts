@@ -6,7 +6,7 @@ CPPFLAGS = -std=gnu11 -Wall -pedantic -Wextra -fPIE
 
 .PHONY: all clean
 
-EXECUTABLES = tcp_server tcp_client
+EXECUTABLES = tcp_server tcp_client tcp_proxy
 
 all: $(EXECUTABLES)
 
@@ -37,8 +37,17 @@ $(OBJ_DIR)tcp_client.o : tcp_client.c | $(OBJ_DIR)
 $(BIN_DIR)tcp_client : $(OBJ_DIR)tcp_client.o | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)tcp_client.o -o $(BIN_DIR)tcp_client
 
+$(OBJ_DIR)tcp_proxy.o : tcp_proxy.c | $(OBJ_DIR)
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) tcp_proxy.c -o $(OBJ_DIR)tcp_proxy.o
+
+$(BIN_DIR)tcp_proxy : $(OBJ_DIR)tcp_proxy.o | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)tcp_proxy.o -o $(BIN_DIR)tcp_proxy
+
 tcp_server : $(BIN_DIR)tcp_server
 	ln -sf $(BIN_DIR)tcp_server tcp_server
 
 tcp_client : $(BIN_DIR)tcp_client
 	ln -sf $(BIN_DIR)tcp_client tcp_client
+
+tcp_proxy : $(BIN_DIR)tcp_proxy
+	ln -sf $(BIN_DIR)tcp_proxy tcp_proxy
