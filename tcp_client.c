@@ -11,9 +11,7 @@
 
 #include <arpa/inet.h>
 
-#define PORT "34920" // the port client will be connecting to 
-
-#define MAXDATASIZE 100 // max number of bytes we can get at once 
+#define PORT "34921" // the port client will be connecting to 
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -30,7 +28,6 @@ int main(int argc, char *argv[])
     int sockfd;
     int32_t num_bytes;
     ssize_t recvstatus;
-    char buf[MAXDATASIZE];
     struct addrinfo hints, *servinfo, *p;
     int rv;
     char s[INET6_ADDRSTRLEN];
@@ -108,20 +105,24 @@ int main(int argc, char *argv[])
                 goto cleanup;
         }
         len = ntohl(len);
-        num_bytes = recv(sockfd, buf, len, 0);
+        if(!(line = realloc(line, len))) {
+            perror("realloc");
+            return_code = 1;
+            goto cleanup;
+        }
+        alloc = len;
+        num_bytes = recv(sockfd, line, len, 0);
         switch (num_bytes) {
             case -1:
                 perror("recv");
                 return_code = 1;
                 goto cleanup;
             case 0:
-                printf("client: connection closed from server\n");
+                printf("client: connection closed by server\n");
                 goto cleanup;
             default:
-                buf[num_bytes] = '\0';
-                printf("%s", buf);
-                free(line);
-                line = NULL;
+                line[num_bytes] = '\0';
+                printf("%s", line);
         }
     }
 

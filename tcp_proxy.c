@@ -17,7 +17,6 @@
 #define PROXYPORT "34921"
 
 #define BACKLOG 10   // how many pending connections queue will hold
-#define MAXDATASIZE 100 // max number of bytes we can get at once 
 
 void sigchld_handler(int s __attribute__((unused)))
 {
@@ -50,7 +49,7 @@ int main(int argc, char *argv[])
     socklen_t sin_size;
     struct sigaction sa;
     int yes=1;
-    char s[INET6_ADDRSTRLEN];
+    char s[INET6_ADDRSTRLEN], c[INET6_ADDRSTRLEN];
     int rv;
     ssize_t num_bytes;
 
@@ -93,7 +92,7 @@ int main(int argc, char *argv[])
 
     inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
             s, sizeof s);
-    printf("tcp proxy: connecting to %s\n", s);
+    printf("tcp proxy: connecting to server on %s\n", s);
 
     freeaddrinfo(servinfo); // all done with this structure
 
@@ -162,54 +161,118 @@ int main(int argc, char *argv[])
 
         inet_ntop(their_addr.ss_family,
             get_in_addr((struct sockaddr *)&their_addr),
-            s, sizeof s);
-        printf("tcp proxy: got connection from %s\n", s);
+            c, sizeof c);
+        printf("tcp proxy: got connection from %s\n", c);
 
         if (!fork()) { // this is the child process
             close(listenfd); // child doesn't need the listener
-            char msg[MAXDATASIZE];
+            char* msg = NULL;
+            int32_t recvstatus;
+            int32_t expected;
             while (1) {
+                recvstatus = recv(new_fd, &expected, sizeof expected, 0);
+                expected = ntohl(expected);
+                switch (recvstatus) {
+                case -1:
+                    perror("recv");
+                    close(new_fd);
+                    exit(1);
+                case 0:
+                    printf("tcp proxy: connection from %s closed\n", c);
+                    close(new_fd);
+                    exit(0);
+                }
                 // get msg from client
-                num_bytes = recv(new_fd, msg, MAXDATASIZE-1, 0);
+                if (!(msg = realloc(msg, expected))) {
+                    perror("realloc");
+                    close(new_fd);
+                    exit(1);
+                }
+                num_bytes = recv(new_fd, msg, expected, 0);
+                int32_t networkbytes = htonl(num_bytes);
                 switch (num_bytes) {
                 case -1:
                     perror("recv");
                     close(new_fd);
                     exit(1);
                 case 0:
-                    printf("tcp proxy: connection from %s closed\n", s);
+                    printf("tcp proxy: client connection from %s closed\n", c);
                     close(new_fd);
                     exit(0);
                 default:
-                    if (send(servfd, msg, num_bytes, 0) == -1) {
-                        perror("send");
-                        close(new_fd);
-                        exit(1);
+                    if (send(servfd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
+                        if (errno == EPIPE) {
+                            printf("tcp proxy: lost server connection to %s\n", s);
+                        } else {
+                            perror("send");
+                        }
+                        goto cleanup;
+                    }
+                    if (send(servfd, msg, num_bytes, MSG_NOSIGNAL) == -1) {
+                        if (errno == EPIPE) {
+                            printf("tcp proxy: lost server connection to %s\n", s);
+                        } else {
+                            perror("send");
+                        }
+                        goto cleanup;
                     }
                 }
+                recvstatus = recv(servfd, &expected, sizeof expected, 0);
+                expected = ntohl(expected);
+                switch (recvstatus) {
+                case -1:
+                    perror("recv");
+                    goto cleanup;
+                case 0:
+                    printf("tcp proxy: server connection from %s closed\n", s);
+                    goto cleanup;
+                }
                 // get msg from server
-                num_bytes = recv(servfd, msg, MAXDATASIZE-1, 0);
+                num_bytes = recv(servfd, msg, expected, 0);
                 switch (num_bytes) {
                 case -1:
                     perror("recv");
-                    close(new_fd);
-                    exit(1);
+                    goto cleanup;
                 case 0:
-                    printf("tcp proxy: connection from %s closed\n", s);
-                    close(new_fd);
-                    exit(0);
+                    printf("tcp proxy: server connection from %s closed\n", s);
+                    goto cleanup;
                 default:
-                    if (send(new_fd, msg, num_bytes, 0) == -1) {
+                    networkbytes = htonl(networkbytes);
+                    if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
                         perror("send");
+                        if (errno == EPIPE) {
+                            printf("tcp proxy: lost client connection to %s\n", c);
+                        } else {
+                            perror("send");
+                        }
                         close(new_fd);
-                        exit(1);
+                        exit(0);
+                    }
+                    if (send(new_fd, msg, num_bytes, MSG_NOSIGNAL) == -1) {
+                        if (errno == EPIPE) {
+                            printf("tcp proxy: lost client connection to %s\n", c);
+                        } else {
+                            perror("send");
+                        }
+                        close(new_fd);
+                        exit(0);
                     }
                 }
 
             }
+
+cleanup:
+            close(servfd);
+            close(new_fd);
+            // for some reason if i don't put \n it doesn't print this line
+            // but there is still an empty line :(
+            printf("tcp proxy: exiting due to loss of connection to server\n");
+            kill(0, SIGINT);
+
         }
         close(new_fd);  // parent doesn't need this
     }
+    close(servfd);
 
     return 0;
 }

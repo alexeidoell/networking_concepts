@@ -17,7 +17,6 @@
 #define PORT "34920"  // the port users will be connecting to
 
 #define BACKLOG 10   // how many pending connections queue will hold
-#define MAXDATASIZE 100 // max number of bytes we can get at once 
 
 void sigchld_handler(int s __attribute__((unused)))
 {
@@ -122,7 +121,7 @@ int main(void)
 
         if (!fork()) { // this is the child process
             close(sockfd); // child doesn't need the listener
-            char msg[MAXDATASIZE];
+            char* msg = NULL;
             int32_t expected;
             ssize_t recvstatus;
             while (1) {
@@ -137,6 +136,11 @@ int main(void)
                     printf("server: connection from %s closed\n", s);
                     close(new_fd);
                     exit(0);
+                }
+                if (!(msg = realloc(msg, expected))) {
+                    perror("realloc");
+                    close(new_fd);
+                    exit(1);
                 }
                 num_bytes = recv(new_fd, msg, expected, 0);
                 int32_t networkbytes = htonl(num_bytes);
