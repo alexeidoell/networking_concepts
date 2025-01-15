@@ -3,6 +3,9 @@
 #include <caesar.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 
 int cipher(char *str, size_t len) {
 
@@ -28,4 +31,53 @@ int cipher(char *str, size_t len) {
         str[i] = curr;
     }
     return 0;
+}
+
+// takes the address of a pointer so length and newly allocated string
+// can be returned (*result) must be null
+// str param needs to be freed after by caller
+ssize_t replacement(char* str, size_t len, char** result) {
+
+    if (str == NULL || len == 0) {
+        return -1;
+    }
+
+    char* outstr = malloc(len);
+    if (!outstr) {
+        return -1;
+    }
+    unsigned int count = 0;
+    unsigned char curr;
+    // flag set when R is found
+    bool flag = false;
+
+    for (size_t i = 0; i < len; ++i) {
+        curr = str[i];
+        if (!flag) {
+            if (curr == 'R') {
+                flag = true;
+            }
+            outstr[i + (count << 1)] = curr;
+        } else {
+            if (curr == 'H') {
+                // found pattern to replace
+                outstr = realloc(outstr, len + 2 + (count << 1));
+                if (!outstr) {
+                    return -1;
+                }
+                strlcpy(outstr + i + (count << 1), "BEI", 4);
+                count += 1;
+                flag = false;
+            } else {
+                if (curr != 'R') {
+                    flag = false;
+                }
+                outstr[i + (count << 2)] = curr;
+            }
+
+        }
+    }
+
+    *result = outstr;
+    return len + (count << 1);
 }

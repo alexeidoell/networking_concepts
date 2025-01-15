@@ -40,8 +40,8 @@ $(BIN_DIR)tcp_client : $(OBJ_DIR)tcp_client.o | $(BIN_DIR)
 $(OBJ_DIR)tcp_proxy.o : tcp_proxy.c | $(OBJ_DIR)
 	$(CC) -c $(CPPFLAGS) $(CFLAGS) tcp_proxy.c -o $(OBJ_DIR)tcp_proxy.o
 
-$(BIN_DIR)tcp_proxy : $(OBJ_DIR)tcp_proxy.o | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)tcp_proxy.o -o $(BIN_DIR)tcp_proxy
+$(BIN_DIR)tcp_proxy : $(OBJ_DIR)tcp_proxy.o $(OBJ_DIR)caesar.o | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)tcp_proxy.o $(OBJ_DIR)caesar.o -o $(BIN_DIR)tcp_proxy
 
 tcp_server : $(BIN_DIR)tcp_server
 	ln -sf $(BIN_DIR)tcp_server tcp_server

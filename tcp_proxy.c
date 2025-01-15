@@ -12,6 +12,7 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <caesar.h>
 
 #define SERVERPORT "34920"  // the port users will be connecting to
 #define PROXYPORT "34921"
@@ -167,6 +168,7 @@ int main(int argc, char *argv[])
         if (!fork()) { // this is the child process
             close(listenfd); // child doesn't need the listener
             char* msg = NULL;
+            char* replacedstr = NULL;
             int32_t recvstatus;
             int32_t expected;
             while (1) {
@@ -237,7 +239,9 @@ int main(int argc, char *argv[])
                     printf("tcp proxy: server connection from %s closed\n", s);
                     goto cleanup;
                 default:
-                    networkbytes = htonl(networkbytes);
+                    num_bytes = replacement(msg, num_bytes, &replacedstr);
+                    // need to actually check this return value
+                    networkbytes = htonl(num_bytes);
                     if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
                         perror("send");
                         if (errno == EPIPE) {
@@ -248,7 +252,7 @@ int main(int argc, char *argv[])
                         close(new_fd);
                         exit(0);
                     }
-                    if (send(new_fd, msg, num_bytes, MSG_NOSIGNAL) == -1) {
+                    if (send(new_fd, replacedstr, num_bytes, MSG_NOSIGNAL) == -1) {
                         if (errno == EPIPE) {
                             printf("tcp proxy: lost client connection to %s\n", c);
                         } else {
@@ -264,6 +268,10 @@ int main(int argc, char *argv[])
 cleanup:
             close(servfd);
             close(new_fd);
+            free(msg);
+            if (replacedstr) {
+                free(replacedstr);
+            }
             // for some reason if i don't put \n it doesn't print this line
             // but there is still an empty line :(
             printf("tcp proxy: exiting due to loss of connection to server\n");
