@@ -43,7 +43,7 @@ ssize_t replacement(char* str, size_t len, char** result) {
     }
 
     char* outstr = malloc(len);
-    if (!outstr) {
+    if (outstr == NULL) {
         return -1;
     }
     unsigned int count = 0;
@@ -62,7 +62,7 @@ ssize_t replacement(char* str, size_t len, char** result) {
             if (curr == 'H') {
                 // found pattern to replace
                 outstr = realloc(outstr, len + 2 + (count << 1));
-                if (!outstr) {
+                if (outstr == NULL) {
                     return -1;
                 }
                 strlcpy(outstr + i + (count << 1), "BEI", 4);

@@ -1,23 +1,20 @@
-// Alexei Doell cka067 11345642
-
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/wait.h>
 #include <unistd.h>
+#include <errno.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <errno.h>
 #include <netinet/in.h>
-#include <netdb.h>
 #include <arpa/inet.h>
-#include <sys/wait.h>
-#include <signal.h>
+#include <netdb.h>
 #include <caesar.h>
 
-#define SERVERPORT "34920"  // the port users will be connecting to
+#define SERVERPORT "34314"    // the port users will be connecting to
 #define PROXYPORT "34921"
 
-#define BACKLOG 10   // how many pending connections queue will hold
+#define BACKLOG 10
 
 void sigchld_handler(int s __attribute__((unused)))
 {
@@ -28,7 +25,6 @@ void sigchld_handler(int s __attribute__((unused)))
 
     errno = saved_errno;
 }
-
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -42,44 +38,40 @@ void *get_in_addr(struct sockaddr *sa)
 
 
 
+
 int main(int argc, char *argv[])
 {
-    int servfd, listenfd, new_fd;  // listen on sock_fd, new connection on new_fd
-    struct addrinfo hints, *servinfo, *p;
+    int servfd;
+    int listenfd, new_fd;  // listen on sock_fd, new connection on new_fd
+    struct addrinfo hints, *servinfo, *p, *prx;
     struct sockaddr_storage their_addr; // connector's address information
     socklen_t sin_size;
-    struct sigaction sa;
     int yes=1;
-    char s[INET6_ADDRSTRLEN], c[INET6_ADDRSTRLEN];
+    struct sigaction sa;
+    char c[INET6_ADDRSTRLEN];
+    char s[INET6_ADDRSTRLEN];
     int rv;
-    ssize_t num_bytes;
+    int numbytes;
 
-
-    if (argc != 2) {
-        fprintf(stderr,"usage: tcp_proxy hostname\n");
+    if (argc != 3) {
+        fprintf(stderr,"usage: udp_proxy server_port proxy_port\n");
         exit(1);
     }
 
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_family = AF_INET6; // set to AF_INET to use IPv4
+    hints.ai_socktype = SOCK_DGRAM;
 
     if ((rv = getaddrinfo(argv[1], SERVERPORT, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         return 1;
     }
 
-    // loop through all the results and connect to the first we can
+    // loop through all the results and make a socket
     for(p = servinfo; p != NULL; p = p->ai_next) {
         if ((servfd = socket(p->ai_family, p->ai_socktype,
                 p->ai_protocol)) == -1) {
-            perror("tcp proxy: socket");
-            continue;
-        }
-
-        if (connect(servfd, p->ai_addr, p->ai_addrlen) == -1) {
-            close(servfd);
-            perror("tcp proxy: connect");
+            perror("udp proxy: socket");
             continue;
         }
 
@@ -87,15 +79,10 @@ int main(int argc, char *argv[])
     }
 
     if (p == NULL) {
-        fprintf(stderr, "tcp proxy: failed to connect\n");
+        fprintf(stderr, "udp proxy: failed to create socket\n");
         return 2;
     }
 
-    inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
-            s, sizeof s);
-    printf("tcp proxy: connecting to server on %s\n", s);
-
-    freeaddrinfo(servinfo); // all done with this structure
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -108,10 +95,10 @@ int main(int argc, char *argv[])
     }
 
     // loop through all the results and bind to the first we can
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((listenfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
-            perror("tcp proxy: socket");
+    for(prx = servinfo; prx != NULL; prx = prx->ai_next) {
+        if ((listenfd = socket(prx->ai_family, prx->ai_socktype,
+                prx->ai_protocol)) == -1) {
+            perror("udp proxy: socket");
             continue;
         }
 
@@ -121,19 +108,18 @@ int main(int argc, char *argv[])
             exit(1);
         }
 
-        if (bind(listenfd, p->ai_addr, p->ai_addrlen) == -1) {
+        if (bind(listenfd, prx->ai_addr, prx->ai_addrlen) == -1) {
             close(listenfd);
-            perror("tcp proxy: bind");
+            perror("udp proxy: bind");
             continue;
         }
 
         break;
     }
 
-    freeaddrinfo(servinfo); // all done with this structure
 
-    if (p == NULL)  {
-        fprintf(stderr, "tcp proxy: failed to bind\n");
+    if (prx == NULL)  {
+        fprintf(stderr, "udp proxy: failed to bind\n");
         exit(1);
     }
 
@@ -149,8 +135,7 @@ int main(int argc, char *argv[])
         perror("sigaction");
         exit(1);
     }
-
-    printf("tcp proxy: waiting for connections...\n");
+    printf("udp proxy: waiting for connections...\n");
 
     while(1) {  // main accept() loop
         sin_size = sizeof their_addr;
@@ -163,7 +148,7 @@ int main(int argc, char *argv[])
         inet_ntop(their_addr.ss_family,
             get_in_addr((struct sockaddr *)&their_addr),
             c, sizeof c);
-        printf("tcp proxy: got connection from %s\n", c);
+        printf("udp proxy: got connection from %s\n", c);
 
         if (!fork()) { // this is the child process
             close(listenfd); // child doesn't need the listener
@@ -171,9 +156,7 @@ int main(int argc, char *argv[])
             char* replacedstr = NULL;
             int32_t recvstatus;
             int32_t expected;
-            ssize_t readbytes;
             while (1) {
-                readbytes = 0;
                 recvstatus = recv(new_fd, &expected, sizeof expected, 0);
                 expected = ntohl(expected);
                 switch (recvstatus) {
@@ -182,7 +165,7 @@ int main(int argc, char *argv[])
                     close(new_fd);
                     exit(1);
                 case 0:
-                    printf("tcp proxy: connection from %s closed\n", c);
+                    printf("udp proxy: connection from %s closed\n", c);
                     close(new_fd);
                     exit(0);
                 }
@@ -192,83 +175,81 @@ int main(int argc, char *argv[])
                     close(new_fd);
                     exit(1);
                 }
-                num_bytes = recv(new_fd, msg, expected, 0);
-                int32_t networkbytes = htonl(num_bytes);
-                switch (num_bytes) {
+                numbytes = recv(new_fd, msg, expected, 0);
+                int32_t networkbytes = htonl(numbytes);
+                switch (numbytes) {
                 case -1:
                     perror("recv");
                     close(new_fd);
                     exit(1);
                 case 0:
-                    printf("tcp proxy: client connection from %s closed\n", c);
+                    printf("udp proxy: client connection from %s closed\n", c);
                     close(new_fd);
                     exit(0);
                 default:
-                    if (send(servfd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
+                    if (sendto(servfd, &networkbytes, sizeof networkbytes, 0,
+                                    p->ai_addr, p->ai_addrlen) == -1) {
                         if (errno == EPIPE) {
-                            printf("tcp proxy: lost server connection to %s\n", s);
+                            printf("udp proxy: lost server connection to %s\n", s);
                         } else {
                             perror("send");
                         }
                         goto cleanup;
                     }
-                    if (send(servfd, msg, num_bytes, MSG_NOSIGNAL) == -1) {
+                    if (sendto(servfd, msg, expected, 0,
+                                    p->ai_addr, p->ai_addrlen) == -1) {
                         if (errno == EPIPE) {
-                            printf("tcp proxy: lost server connection to %s\n", s);
+                            printf("udp proxy: lost server connection to %s\n", s);
                         } else {
                             perror("send");
                         }
                         goto cleanup;
                     }
                 }
-                while (readbytes != 4) {
-                    recvstatus = recv(servfd, &expected, sizeof expected, 0);
-                    expected = ntohl(expected);
-                    switch (recvstatus) {
-                        case -1:
-                            perror("recv");
-                            goto cleanup;
-                        case 0:
-                            printf("tcp proxy: server connection from %s closed\n", s);
-                            goto cleanup;
-                    }
-                    readbytes += recvstatus;
+                recvstatus = recvfrom(servfd, &expected, sizeof expected, 0,
+                        p->ai_addr, &p->ai_addrlen);
+                expected = ntohl(expected);
+                switch (recvstatus) {
+                case -1:
+                    perror("recv");
+                    goto cleanup;
+                case 0:
+                    printf("udp proxy: server connection from %s closed\n", s);
+                    goto cleanup;
                 }
                 // get msg from server
-                readbytes = 0;
-                while (readbytes != expected) {
-                    num_bytes = recv(servfd, msg, expected, 0);
-                    switch (num_bytes) {
-                        case -1:
-                            perror("recv");
-                            goto cleanup;
-                        case 0:
-                            printf("tcp proxy: server connection from %s closed\n", s);
-                            goto cleanup;
-                    }
-                    readbytes += num_bytes;
-                }
-                num_bytes = replacement(msg, num_bytes, &replacedstr);
-                // need to actually check this return value
-                networkbytes = htonl(num_bytes);
-                if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
-                    perror("send");
-                    if (errno == EPIPE) {
-                        printf("tcp proxy: lost client connection to %s\n", c);
-                    } else {
+                numbytes = recvfrom(servfd, msg, expected, 0,
+                        p->ai_addr, &p->ai_addrlen);
+                switch (numbytes) {
+                case -1:
+                    perror("recv");
+                    goto cleanup;
+                case 0:
+                    printf("udp proxy: server connection from %s closed\n", s);
+                    goto cleanup;
+                default:
+                    expected = replacement(msg, expected, &replacedstr);
+                    // need to actually check this return value
+                    networkbytes = htonl(expected);
+                    if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
                         perror("send");
+                        if (errno == EPIPE) {
+                            printf("udp proxy: lost client connection to %s\n", c);
+                        } else {
+                            perror("send");
+                        }
+                        close(new_fd);
+                        exit(0);
                     }
-                    close(new_fd);
-                    exit(0);
-                }
-                if (send(new_fd, replacedstr, num_bytes, MSG_NOSIGNAL) == -1) {
-                    if (errno == EPIPE) {
-                        printf("tcp proxy: lost client connection to %s\n", c);
-                    } else {
-                        perror("send");
+                    if (send(new_fd, replacedstr, expected, MSG_NOSIGNAL) == -1) {
+                        if (errno == EPIPE) {
+                            printf("udp proxy: lost client connection to %s\n", c);
+                        } else {
+                            perror("send");
+                        }
+                        close(new_fd);
+                        exit(0);
                     }
-                    close(new_fd);
-                    exit(0);
                 }
 
             }
@@ -282,7 +263,7 @@ cleanup:
             }
             // for some reason if i don't put \n it doesn't print this line
             // but there is still an empty line :(
-            printf("tcp proxy: exiting due to loss of connection to server\n");
+            printf("udp proxy: exiting due to loss of connection to server\n");
             kill(0, SIGINT);
 
         }

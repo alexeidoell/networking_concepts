@@ -105,10 +105,15 @@ int main(int argc, char *argv[])
                 goto cleanup;
         }
         len = ntohl(len);
-        if(!(line = realloc(line, len))) {
-            perror("realloc");
-            return_code = 1;
-            goto cleanup;
+        // if len is less than 4 then this never matters, because
+        // that means RH was not replaced, as well we cannot realloc
+        // to a size smaller than 4
+        if (len >= 4) {
+            if(!(line = realloc(line, len))) {
+                perror("realloc");
+                return_code = 1;
+                goto cleanup;
+            }
         }
         alloc = len;
         num_bytes = recv(sockfd, line, len, 0);

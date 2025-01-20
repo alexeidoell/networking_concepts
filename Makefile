@@ -2,11 +2,11 @@
 
 CC = gcc
 CFLAGS = -g -I.
-CPPFLAGS = -std=gnu11 -Wall -pedantic -Wextra -fPIE
+CPPFLAGS = -std=gnu99 -Wall -pedantic -Wextra -fPIE
 
 .PHONY: all clean
 
-EXECUTABLES = tcp_server tcp_client tcp_proxy
+EXECUTABLES = tcp_server tcp_client tcp_proxy udp_server udp_proxy
 
 all: $(EXECUTABLES)
 
@@ -43,6 +43,18 @@ $(OBJ_DIR)tcp_proxy.o : tcp_proxy.c | $(OBJ_DIR)
 $(BIN_DIR)tcp_proxy : $(OBJ_DIR)tcp_proxy.o $(OBJ_DIR)caesar.o | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)tcp_proxy.o $(OBJ_DIR)caesar.o -o $(BIN_DIR)tcp_proxy
 
+$(OBJ_DIR)udp_server.o : udp_server.c | $(OBJ_DIR)
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) udp_server.c -o $(OBJ_DIR)udp_server.o
+
+$(BIN_DIR)udp_server : $(OBJ_DIR)udp_server.o $(OBJ_DIR)caesar.o | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)udp_server.o $(OBJ_DIR)caesar.o -o $(BIN_DIR)udp_server
+
+$(OBJ_DIR)udp_proxy.o : udp_proxy.c | $(OBJ_DIR)
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) udp_proxy.c -o $(OBJ_DIR)udp_proxy.o
+
+$(BIN_DIR)udp_proxy : $(OBJ_DIR)udp_proxy.o $(OBJ_DIR)caesar.o | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)udp_proxy.o $(OBJ_DIR)caesar.o -o $(BIN_DIR)udp_proxy
+
 tcp_server : $(BIN_DIR)tcp_server
 	ln -sf $(BIN_DIR)tcp_server tcp_server
 
@@ -51,3 +63,9 @@ tcp_client : $(BIN_DIR)tcp_client
 
 tcp_proxy : $(BIN_DIR)tcp_proxy
 	ln -sf $(BIN_DIR)tcp_proxy tcp_proxy
+
+udp_proxy : $(BIN_DIR)udp_proxy
+	ln -sf $(BIN_DIR)udp_proxy udp_proxy
+
+udp_server : $(BIN_DIR)udp_server
+	ln -sf $(BIN_DIR)udp_server udp_server
