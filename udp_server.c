@@ -65,7 +65,7 @@ int main(void)
     }
 
 
-    printf("udp server: waiting to recvfrom...\n");
+    printf("udp server: waiting to recvfrom on %s\n", MYPORT);
 
     addr_len = sizeof their_addr;
 

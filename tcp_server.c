@@ -64,7 +64,7 @@ int main(void)
     for(p = servinfo; p != NULL; p = p->ai_next) {
         if ((sockfd = socket(p->ai_family, p->ai_socktype,
                 p->ai_protocol)) == -1) {
-            perror("server: socket");
+            perror("tcp server: socket");
             continue;
         }
 
@@ -76,7 +76,7 @@ int main(void)
 
         if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
             close(sockfd);
-            perror("server: bind");
+            perror("tcp server: bind");
             continue;
         }
 
@@ -86,7 +86,7 @@ int main(void)
     freeaddrinfo(servinfo); // all done with this structure
 
     if (p == NULL)  {
-        fprintf(stderr, "server: failed to bind\n");
+        fprintf(stderr, "tcp server: failed to bind\n");
         exit(1);
     }
 
@@ -103,7 +103,7 @@ int main(void)
         exit(1);
     }
 
-    printf("server: waiting for connections...\n");
+    printf("tcp server: waiting for connections...\n");
 
     while(1) {  // main accept() loop
         sin_size = sizeof their_addr;
@@ -116,7 +116,7 @@ int main(void)
         inet_ntop(their_addr.ss_family,
             get_in_addr((struct sockaddr *)&their_addr),
             s, sizeof s);
-        printf("server: got connection from %s\n", s);
+        printf("tcp server: got connection from %s\n", s);
 
         if (!fork()) { // this is the child process
             close(sockfd); // child doesn't need the listener
@@ -130,7 +130,7 @@ int main(void)
                         close(new_fd);
                         exit(1);
                     case 0:
-                        printf("server: connection from %s closed\n", s);
+                        printf("tcp server: connection from %s closed\n", s);
                         close(new_fd);
                         exit(0);
                 }
@@ -146,7 +146,7 @@ int main(void)
                         close(new_fd);
                         exit(1);
                     case 0:
-                        printf("server: connection from %s closed\n", s);
+                        printf("tcp server: connection from %s closed\n", s);
                         close(new_fd);
                         exit(0);
                     default:

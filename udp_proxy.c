@@ -231,6 +231,11 @@ int main(int argc, char *argv[])
                     goto cleanup;
                 default:
                     expected = replacement(msg, expected, &replacedstr);
+                    if (expected == -1) {
+                        printf("tcp proxy: character replacement failed\n");
+                        close(new_fd);
+                        exit(0);
+                    }
                     // need to actually check this return value
                     networkbytes = htonl(expected);
                     if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
