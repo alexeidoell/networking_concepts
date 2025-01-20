@@ -12,7 +12,7 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
-#include <caesar.h>
+#include <shared.h>
 
 #define PORT "34920"  // the port users will be connecting to
 
@@ -49,7 +49,6 @@ int main(void)
     int yes=1;
     char s[INET6_ADDRSTRLEN];
     int rv;
-    int32_t num_bytes;
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -123,48 +122,46 @@ int main(void)
             close(sockfd); // child doesn't need the listener
             char* msg = NULL;
             int32_t expected;
-            ssize_t recvstatus;
+            int32_t networkbytes;
             while (1) {
-                recvstatus = recv(new_fd, &expected, sizeof expected, 0);
-                expected = ntohl(expected);
-                switch (recvstatus) {
-                case -1:
-                    perror("recv");
-                    close(new_fd);
-                    exit(1);
-                case 0:
-                    printf("server: connection from %s closed\n", s);
-                    close(new_fd);
-                    exit(0);
+                switch(recvloop(new_fd, &expected, sizeof expected)) {
+                    case -1:
+                        perror("recv");
+                        close(new_fd);
+                        exit(1);
+                    case 0:
+                        printf("server: connection from %s closed\n", s);
+                        close(new_fd);
+                        exit(0);
                 }
+                expected = ntohl(expected);
                 if (!(msg = realloc(msg, expected))) {
                     perror("realloc");
                     close(new_fd);
                     exit(1);
                 }
-                num_bytes = recv(new_fd, msg, expected, 0);
-                int32_t networkbytes = htonl(num_bytes);
-                switch (num_bytes) {
-                case -1:
-                    perror("recv");
-                    close(new_fd);
-                    exit(1);
-                case 0:
-                    printf("server: connection from %s closed\n", s);
-                    close(new_fd);
-                    exit(0);
-                default:
-                    cipher(msg, expected);
-                    if (send(new_fd, &networkbytes, sizeof networkbytes, 0) == -1) {
-                        perror("send");
+                switch(recvloop(new_fd, msg, expected)) {
+                    case -1:
+                        perror("recv");
                         close(new_fd);
                         exit(1);
-                    }
-                    if (send(new_fd, msg, num_bytes, 0) == -1) {
-                        perror("send");
+                    case 0:
+                        printf("server: connection from %s closed\n", s);
                         close(new_fd);
-                        exit(1);
-                    }
+                        exit(0);
+                    default:
+                        networkbytes = htonl(expected);
+                        cipher(msg, expected);
+                        if (send(new_fd, &networkbytes, sizeof networkbytes, 0) == -1) {
+                            perror("send");
+                            close(new_fd);
+                            exit(1);
+                        }
+                        if (send(new_fd, msg, expected, 0) == -1) {
+                            perror("send");
+                            close(new_fd);
+                            exit(1);
+                        }
                 }
             }
         }

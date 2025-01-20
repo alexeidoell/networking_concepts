@@ -1,11 +1,12 @@
 // Alexei Doell cka067 11345642
 
-#include <caesar.h>
+#include <shared.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 
 int cipher(char *str, size_t len) {
 
@@ -80,4 +81,18 @@ ssize_t replacement(char* str, size_t len, char** result) {
 
     *result = outstr;
     return len + (count << 1);
+}
+
+
+int recvloop(int fd, void* buf, size_t expected) {
+    size_t readbytes = 0;
+    int recvstatus;
+    while (readbytes != expected) {
+        recvstatus = recv(fd, (char*)buf + readbytes, expected, 0);
+        if (recvstatus <= 0) {
+            return recvstatus;
+        }
+        readbytes += recvstatus;
+    }
+    return readbytes;
 }

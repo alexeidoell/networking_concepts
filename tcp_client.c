@@ -8,10 +8,9 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <shared.h>
 
 #include <arpa/inet.h>
-
-#define PORT "34921" // the port client will be connecting to 
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -26,15 +25,13 @@ void *get_in_addr(struct sockaddr *sa)
 int main(int argc, char *argv[])
 {
     int sockfd;
-    int32_t num_bytes;
-    ssize_t recvstatus;
     struct addrinfo hints, *servinfo, *p;
     int rv;
     char s[INET6_ADDRSTRLEN];
     int return_code = 0;
 
-    if (argc != 2) {
-        fprintf(stderr,"usage: client hostname\n");
+    if (argc != 3) {
+        fprintf(stderr,"usage: client hostname port\n");
         exit(1);
     }
 
@@ -42,7 +39,7 @@ int main(int argc, char *argv[])
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    if ((rv = getaddrinfo(argv[1], PORT, &hints, &servinfo)) != 0) {
+    if ((rv = getaddrinfo(argv[1], argv[2], &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         return 1;
     }
@@ -94,8 +91,7 @@ int main(int argc, char *argv[])
             perror("send: buffer");
             goto cleanup;
         }
-        recvstatus = recv(sockfd, &len, sizeof len, 0);
-        switch (recvstatus) {
+        switch(recvloop(sockfd, &len, sizeof len)) {
             case -1:
                 perror("recv");
                 return_code = 1;
@@ -116,8 +112,7 @@ int main(int argc, char *argv[])
             }
         }
         alloc = len;
-        num_bytes = recv(sockfd, line, len, 0);
-        switch (num_bytes) {
+        switch(recvloop(sockfd, line, len)) {
             case -1:
                 perror("recv");
                 return_code = 1;
@@ -126,7 +121,7 @@ int main(int argc, char *argv[])
                 printf("client: connection closed by server\n");
                 goto cleanup;
             default:
-                line[num_bytes] = '\0';
+                line[len] = '\0';
                 printf("%s", line);
         }
     }

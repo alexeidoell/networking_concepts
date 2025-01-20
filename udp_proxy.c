@@ -1,3 +1,5 @@
+// Alexei Doell cka067 11345642
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -9,7 +11,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <caesar.h>
+#include <shared.h>
 
 #define SERVERPORT "34314"    // the port users will be connecting to
 #define PROXYPORT "34921"
@@ -54,7 +56,7 @@ int main(int argc, char *argv[])
     int numbytes;
 
     if (argc != 3) {
-        fprintf(stderr,"usage: udp_proxy server_port proxy_port\n");
+        fprintf(stderr,"usage: udp_proxy hostname server_port\n");
         exit(1);
     }
 

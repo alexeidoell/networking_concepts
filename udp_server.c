@@ -1,3 +1,5 @@
+// Alexei Doell cka067 11345642
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -8,11 +10,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <caesar.h>
+#include <shared.h>
 
 #define MYPORT "34314"    // the port users will be connecting to
-
-#define MAXBUFLEN 100
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)

@@ -12,7 +12,7 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
-#include <caesar.h>
+#include <shared.h>
 
 #define PROXYPORT "34921"
 
@@ -37,19 +37,6 @@ void *get_in_addr(struct sockaddr *sa)
     }
 
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
-
-int recvloop(int fd, void* buf, size_t expected) {
-    size_t readbytes = 0;
-    int recvstatus;
-    while (readbytes != expected) {
-        recvstatus = recv(fd, (char*)buf + readbytes, expected, 0);
-        if (recvstatus <= 0) {
-            return recvstatus;
-        }
-        readbytes += recvstatus;
-    }
-    return readbytes;
 }
 
 int main(int argc, char *argv[])
