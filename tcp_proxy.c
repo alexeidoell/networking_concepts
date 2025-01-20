@@ -1,5 +1,6 @@
 // Alexei Doell cka067 11345642
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -13,6 +14,9 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <shared.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #define PROXYPORT "34921"
 
@@ -41,9 +45,10 @@ void *get_in_addr(struct sockaddr *sa)
 
 int main(int argc, char *argv[])
 {
-    int servfd, listenfd, new_fd;  // listen on sock_fd, new connection on new_fd
+    int servfd, listenfd, new_fd, mtxfd;  // listen on sock_fd, new connection on new_fd
     struct addrinfo hints, *servinfo, *p;
     struct sockaddr_storage their_addr; // connector's address information
+    pthread_mutex_t *mutex;
     socklen_t sin_size;
     struct sigaction sa;
     int yes=1;
@@ -146,6 +151,19 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
+    mtxfd = shm_open("tcp mutex", O_CREAT | O_RDWR | O_TRUNC, 0);
+    if (ftruncate(mtxfd, sizeof(pthread_mutex_t)) == -1) {
+        printf("tcp proxy: failed to create mutex\n");
+        exit(1);
+    }
+    mutex = mmap(NULL, sizeof(pthread_mutex_t), PROT_WRITE | PROT_READ, MAP_SHARED, mtxfd, 0);
+    if (mutex == MAP_FAILED) {
+        printf("tcp proxy: failed to create mutex\n");
+        exit(1);
+    }
+    close(mtxfd);
+    pthread_mutex_init(mutex, 0);
+
     printf("tcp proxy: waiting for connections...\n");
 
     while(1) {  // main accept() loop
@@ -195,6 +213,7 @@ int main(int argc, char *argv[])
                         exit(0);
                 }
                 int32_t networkbytes = htonl(expected);
+                pthread_mutex_lock(mutex);
                 if (send(servfd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
                     if (errno == EPIPE) {
                         printf("tcp proxy: lost server connection to %s\n", s);
@@ -232,6 +251,7 @@ int main(int argc, char *argv[])
                         close(new_fd);
                         exit(0);
                 }
+                pthread_mutex_unlock(mutex);
                 expected = replacement(msg, expected, &replacedstr);
                 if (expected == -1) {
                     printf("tcp proxy: character replacement failed\n");
@@ -269,6 +289,7 @@ cleanup:
             if (replacedstr) {
                 free(replacedstr);
             }
+            munmap(mutex, sizeof(pthread_mutex_t));
             // for some reason if i don't put \n it doesn't print this line
             // but there is still an empty line :(
             printf("tcp proxy: exiting due to loss of connection to server\n");
@@ -277,7 +298,5 @@ cleanup:
         }
         close(new_fd);  // parent doesn't need this
     }
-    close(servfd);
-
     return 0;
 }
