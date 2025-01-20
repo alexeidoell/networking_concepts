@@ -73,7 +73,7 @@ ssize_t replacement(char* str, size_t len, char** result) {
                 if (curr != 'R') {
                     flag = false;
                 }
-                outstr[i + (count << 2)] = curr;
+                outstr[i + (count << 1)] = curr;
             }
 
         }
