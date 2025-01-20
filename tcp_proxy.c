@@ -14,7 +14,6 @@
 #include <signal.h>
 #include <caesar.h>
 
-#define SERVERPORT "34920"  // the port users will be connecting to
 #define PROXYPORT "34921"
 
 #define BACKLOG 10   // how many pending connections queue will hold
@@ -40,7 +39,18 @@ void *get_in_addr(struct sockaddr *sa)
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-
+int recvloop(int fd, void* buf, size_t expected) {
+    size_t readbytes = 0;
+    int recvstatus;
+    while (readbytes != expected) {
+        recvstatus = recv(fd, (char*)buf + readbytes, expected, 0);
+        if (recvstatus <= 0) {
+            return recvstatus;
+        }
+        readbytes += recvstatus;
+    }
+    return readbytes;
+}
 
 int main(int argc, char *argv[])
 {
@@ -52,11 +62,10 @@ int main(int argc, char *argv[])
     int yes=1;
     char s[INET6_ADDRSTRLEN], c[INET6_ADDRSTRLEN];
     int rv;
-    ssize_t num_bytes;
 
 
-    if (argc != 2) {
-        fprintf(stderr,"usage: tcp_proxy hostname\n");
+    if (argc != 3) {
+        fprintf(stderr,"usage: tcp_proxy hostname server_port\n");
         exit(1);
     }
 
@@ -64,7 +73,7 @@ int main(int argc, char *argv[])
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    if ((rv = getaddrinfo(argv[1], SERVERPORT, &hints, &servinfo)) != 0) {
+    if ((rv = getaddrinfo(argv[1], argv[2], &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         return 1;
     }
@@ -72,7 +81,7 @@ int main(int argc, char *argv[])
     // loop through all the results and connect to the first we can
     for(p = servinfo; p != NULL; p = p->ai_next) {
         if ((servfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
+                        p->ai_protocol)) == -1) {
             perror("tcp proxy: socket");
             continue;
         }
@@ -110,13 +119,13 @@ int main(int argc, char *argv[])
     // loop through all the results and bind to the first we can
     for(p = servinfo; p != NULL; p = p->ai_next) {
         if ((listenfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
+                        p->ai_protocol)) == -1) {
             perror("tcp proxy: socket");
             continue;
         }
 
         if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &yes,
-                sizeof(int)) == -1) {
+                    sizeof(int)) == -1) {
             perror("setsockopt");
             exit(1);
         }
@@ -161,96 +170,84 @@ int main(int argc, char *argv[])
         }
 
         inet_ntop(their_addr.ss_family,
-            get_in_addr((struct sockaddr *)&their_addr),
-            c, sizeof c);
+                get_in_addr((struct sockaddr *)&their_addr),
+                c, sizeof c);
         printf("tcp proxy: got connection from %s\n", c);
 
         if (!fork()) { // this is the child process
             close(listenfd); // child doesn't need the listener
             char* msg = NULL;
             char* replacedstr = NULL;
-            int32_t recvstatus;
             int32_t expected;
-            ssize_t readbytes;
             while (1) {
-                readbytes = 0;
-                recvstatus = recv(new_fd, &expected, sizeof expected, 0);
-                expected = ntohl(expected);
-                switch (recvstatus) {
-                case -1:
-                    perror("recv");
-                    close(new_fd);
-                    exit(1);
-                case 0:
-                    printf("tcp proxy: connection from %s closed\n", c);
-                    close(new_fd);
-                    exit(0);
+                switch (recvloop(new_fd, &expected, sizeof expected)) {
+                    case -1:
+                        perror("recv");
+                        close(new_fd);
+                        exit(1);
+                    case 0:
+                        printf("tcp proxy: connection from %s closed\n", c);
+                        close(new_fd);
+                        exit(0);
                 }
+                expected = ntohl(expected);
                 // get msg from client
                 if (!(msg = realloc(msg, expected))) {
                     perror("realloc");
                     close(new_fd);
                     exit(1);
                 }
-                num_bytes = recv(new_fd, msg, expected, 0);
-                int32_t networkbytes = htonl(num_bytes);
-                switch (num_bytes) {
-                case -1:
-                    perror("recv");
-                    close(new_fd);
-                    exit(1);
-                case 0:
-                    printf("tcp proxy: client connection from %s closed\n", c);
-                    close(new_fd);
-                    exit(0);
-                default:
-                    if (send(servfd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
-                        if (errno == EPIPE) {
-                            printf("tcp proxy: lost server connection to %s\n", s);
-                        } else {
-                            perror("send");
-                        }
-                        goto cleanup;
-                    }
-                    if (send(servfd, msg, num_bytes, MSG_NOSIGNAL) == -1) {
-                        if (errno == EPIPE) {
-                            printf("tcp proxy: lost server connection to %s\n", s);
-                        } else {
-                            perror("send");
-                        }
-                        goto cleanup;
-                    }
+                switch (recvloop(new_fd, msg, expected)) {
+                    case -1:
+                        perror("recv");
+                        close(new_fd);
+                        exit(1);
+                    case 0:
+                        printf("tcp proxy: connection from %s closed\n", c);
+                        close(new_fd);
+                        exit(0);
                 }
-                while (readbytes != 4) {
-                    recvstatus = recv(servfd, &expected, sizeof expected, 0);
-                    expected = ntohl(expected);
-                    switch (recvstatus) {
-                        case -1:
-                            perror("recv");
-                            goto cleanup;
-                        case 0:
-                            printf("tcp proxy: server connection from %s closed\n", s);
-                            goto cleanup;
+                int32_t networkbytes = htonl(expected);
+                if (send(servfd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
+                    if (errno == EPIPE) {
+                        printf("tcp proxy: lost server connection to %s\n", s);
+                    } else {
+                        perror("send");
                     }
-                    readbytes += recvstatus;
+                    goto cleanup;
                 }
-                // get msg from server
-                readbytes = 0;
-                while (readbytes != expected) {
-                    num_bytes = recv(servfd, msg, expected, 0);
-                    switch (num_bytes) {
-                        case -1:
-                            perror("recv");
-                            goto cleanup;
-                        case 0:
-                            printf("tcp proxy: server connection from %s closed\n", s);
-                            goto cleanup;
+                if (send(servfd, msg, expected, MSG_NOSIGNAL) == -1) {
+                    if (errno == EPIPE) {
+                        printf("tcp proxy: lost server connection to %s\n", s);
+                    } else {
+                        perror("send");
                     }
-                    readbytes += num_bytes;
+                    goto cleanup;
                 }
-                num_bytes = replacement(msg, num_bytes, &replacedstr);
+                switch (recvloop(servfd, &expected, sizeof expected)) {
+                    case -1:
+                        perror("recv");
+                        close(new_fd);
+                        exit(1);
+                    case 0:
+                        printf("tcp proxy: server connection from %s closed\n", s);
+                        close(new_fd);
+                        exit(0);
+                }
+                expected = ntohl(expected);
+                switch (recvloop(servfd, msg, expected)) {
+                    case -1:
+                        perror("recv");
+                        close(new_fd);
+                        exit(1);
+                    case 0:
+                        printf("tcp proxy: server connection from %s closed\n", s);
+                        close(new_fd);
+                        exit(0);
+                }
+                expected = replacement(msg, expected, &replacedstr);
                 // need to actually check this return value
-                networkbytes = htonl(num_bytes);
+                networkbytes = htonl(expected);
                 if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
                     perror("send");
                     if (errno == EPIPE) {
@@ -261,7 +258,7 @@ int main(int argc, char *argv[])
                     close(new_fd);
                     exit(0);
                 }
-                if (send(new_fd, replacedstr, num_bytes, MSG_NOSIGNAL) == -1) {
+                if (send(new_fd, replacedstr, expected, MSG_NOSIGNAL) == -1) {
                     if (errno == EPIPE) {
                         printf("tcp proxy: lost client connection to %s\n", c);
                     } else {
