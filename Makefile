@@ -1,7 +1,7 @@
 # Alexei Doell cka067 11345642
 
 CC = gcc
-CFLAGS = -g -I.
+CFLAGS = -g -I. 
 CPPFLAGS = -std=gnu99 -Wall -pedantic -Wextra -fPIE
 
 .PHONY: all clean
@@ -38,10 +38,10 @@ $(BIN_DIR)tcp_client : $(OBJ_DIR)tcp_client.o $(OBJ_DIR)shared.o | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)tcp_client.o $(OBJ_DIR)shared.o -o $(BIN_DIR)tcp_client
 
 $(OBJ_DIR)tcp_proxy.o : tcp_proxy.c | $(OBJ_DIR)
-	$(CC) -c $(CPPFLAGS) $(CFLAGS) tcp_proxy.c -o $(OBJ_DIR)tcp_proxy.o
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) tcp_proxy.c -o $(OBJ_DIR)tcp_proxy.o -lpthread
 
 $(BIN_DIR)tcp_proxy : $(OBJ_DIR)tcp_proxy.o $(OBJ_DIR)shared.o | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)tcp_proxy.o $(OBJ_DIR)shared.o -o $(BIN_DIR)tcp_proxy
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)tcp_proxy.o $(OBJ_DIR)shared.o -o $(BIN_DIR)tcp_proxy -lpthread
 
 $(OBJ_DIR)udp_server.o : udp_server.c | $(OBJ_DIR)
 	$(CC) -c $(CPPFLAGS) $(CFLAGS) udp_server.c -o $(OBJ_DIR)udp_server.o
@@ -50,7 +50,7 @@ $(BIN_DIR)udp_server : $(OBJ_DIR)udp_server.o $(OBJ_DIR)shared.o | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)udp_server.o $(OBJ_DIR)shared.o -o $(BIN_DIR)udp_server
 
 $(OBJ_DIR)udp_proxy.o : udp_proxy.c | $(OBJ_DIR)
-	$(CC) -c $(CPPFLAGS) $(CFLAGS) udp_proxy.c -o $(OBJ_DIR)udp_proxy.o
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) udp_proxy.c -o $(OBJ_DIR)udp_proxy.o -lpthread
 
 $(BIN_DIR)udp_proxy : $(OBJ_DIR)udp_proxy.o $(OBJ_DIR)shared.o | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)udp_proxy.o $(OBJ_DIR)shared.o -o $(BIN_DIR)udp_proxy

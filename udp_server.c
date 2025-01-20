@@ -12,7 +12,7 @@
 #include <netdb.h>
 #include <shared.h>
 
-#define MYPORT "34314"    // the port users will be connecting to
+#define MYPORT "34922"    // the port users will be connecting to
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)

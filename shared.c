@@ -66,7 +66,7 @@ ssize_t replacement(char* str, size_t len, char** result) {
                 if (outstr == NULL) {
                     return -1;
                 }
-                strlcpy(outstr + i + (count << 1), "BEI", 4);
+                strncpy(outstr + i + (count << 1), "BEI", 4);
                 count += 1;
                 flag = false;
             } else {

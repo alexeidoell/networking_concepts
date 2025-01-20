@@ -213,6 +213,9 @@ int main(int argc, char *argv[])
                         exit(0);
                 }
                 int32_t networkbytes = htonl(expected);
+                // mutex on sends to server to ensure the two messages are
+                // not potentially interleaved with other child processes'
+                // sends
                 pthread_mutex_lock(mutex);
                 if (send(servfd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
                     if (errno == EPIPE) {
@@ -289,6 +292,7 @@ cleanup:
             if (replacedstr) {
                 free(replacedstr);
             }
+            pthread_mutex_destroy(mutex);
             munmap(mutex, sizeof(pthread_mutex_t));
             // for some reason if i don't put \n it doesn't print this line
             // but there is still an empty line :(

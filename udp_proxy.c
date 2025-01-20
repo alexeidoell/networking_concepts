@@ -13,8 +13,7 @@
 #include <netdb.h>
 #include <shared.h>
 
-#define SERVERPORT "34314"    // the port users will be connecting to
-#define PROXYPORT "34921"
+#define PROXYPORT "34923"
 
 #define BACKLOG 10
 
@@ -37,9 +36,6 @@ void *get_in_addr(struct sockaddr *sa)
 
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
-
-
-
 
 int main(int argc, char *argv[])
 {
@@ -64,7 +60,7 @@ int main(int argc, char *argv[])
     hints.ai_family = AF_INET6; // set to AF_INET to use IPv4
     hints.ai_socktype = SOCK_DGRAM;
 
-    if ((rv = getaddrinfo(argv[1], SERVERPORT, &hints, &servinfo)) != 0) {
+    if ((rv = getaddrinfo(argv[1], argv[2], &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         return 1;
     }
