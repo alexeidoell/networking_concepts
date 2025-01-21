@@ -1,2 +1,138 @@
 Alexei Doell cka067 11345642
 
+
+Goals
+
+I need to make a TCP server, proxy and client, as well as a UDP server and
+TCP-to-UDP proxy. For this, I am using the base templates from Beej's as
+recommended by the prof. I will mainly focus on what I all changed from
+these base programs as opposed to the things that were already implemented,
+e.g. looping through addrinfo structs and then binding to a valid one. As well,
+there are some shared functions which I will explain at the start of this design
+document.
+
+Shared functions
+
+recvloop(int fd, void* buf, size_t expected) -> int
+
+For all my TCP recv calls, I made a helper function called recvloop which can
+be found in shared.c. This function takes an fd to recv from, a buffer to write
+to and an expected number of bytes that you wish to receive. recvloop will call
+recv until the number of bytes you wish to receive are eventually received. If
+the expected number of bytes is not received, recvloop will continue calling
+recv until there is some sort of error or the fd is closed from the other end.
+If there is an error, the same error code is returned to be handled by the
+caller, or if there is no error, the number of bytes received is returned,
+but really this doesn't actually matter because it will only return if those
+bytes equal the expected bytes. It does make it easy to check for errors though.
+
+caesar(char* buf, size_t len) -> int
+
+This function performs my caesar cipher in place on the given string. All it
+does it replace each character in the string from index 0 to len - 1 with the
+character 15 places away.
+
+replacement(char* buf, size_t len, char** result) -> int
+
+This function takes a source buffer and loops through it checking for the
+substring "RH" and replaces it with "RBEI". In order to accomodate for
+potentially overrunning the source buffer, it additionally takes a pointer to 
+a char* as an out parameter. Within replacement, there is a buffer that is malloced 
+to fit the size of the replacement string with RH->RBEI completed, which is then 
+placed into the out parameter. The function returns -1 in an error, or the new 
+length of the string, to be used as a length for future send calls.
+
+TCP Server
+
+For the TCP server, there is not much change from the Beej's stream server
+example. In fact there is no actual change at all outside of the fork() call
+in the main loop. Within the child process that is forked and given the
+new fd for the newly connected client, the child process runs a while loop
+that begins with a call to the helper function recvloop.
+
+In the TCP server's child process, the first recvloop expects a network long,
+which is used as the expected length of the full message for the next recvloop.
+I believe this is standard TCP practice due to its nature as a stream of bytes.
+We will always expect a 32bit integer first, then can get exactly that number
+of bytes after. Using this integer, I realloc the message buffer in the server
+to fit the message and then call recvloop again to get the message from the client.
+
+Once the message is received, caesar is called on the messag. The process then
+sends the length of the message, and then the message itself to its client.
+
+Overall, the TCP server is quite simple, it just becomes quite dense due to
+the need to check the return values of so many syscalls.
+
+TCP Proxy
+
+The TCP proxy is significantly more involved than the TCP server due to its
+two way communication but still isn't that far removed from Beej's template.
+
+As with the TCP server, the parent process of the proxy listens on a port and
+when a new connection is accepted, a child process is forked. However, as well
+as listening on a port, the proxy also will create an fd that connects to the
+TCP server. This fd is shared between all of its children as the single connection
+from the proxy to the server. In essence, the proxy (outside of the child loop)
+is just Beej's stream client with the stream server binding and listening code
+pasted in.
+
+Within the child process, the proxy will basically just do what the TCP server
+does, first waiting on a recvloop from the proxy's client, in exactly the same way
+that the TCP server recvs from its client, then sends that message to the TCP
+server, acting as the client for the TCP server. After this, it once again waits 
+on a recvloop for the response from the server, in the exact same way all TCP 
+communication has been done (length then message). Once this message is received,
+it calls replacement on the response from the server. This creates a new string 
+which is then sent along with its length to the proxy process' client.
+
+The majority of the proxy is quite simple, but this time to code becomes even
+more dense than the server due to needing to essentially perform the job of the
+server twice per message received.
+
+The biggest difference I see in my implementation from Beej's, is my usage of a
+mutex between the child processes of the proxy. Due to the fact that the proxy
+uses a single connection to the server yet can have multiple child processes
+send a message to the server which may be interleaved with eachother due to the
+aforementioned single connection, there is a need to ensure that only one of the child
+processes of the proxy is sending a message to the server at a time. For this, 
+I used the modern (not really modern but just not systemV lol) POSIX shared memory
+functions shm_open and mmap to created a shared region of memory between each of the
+children.
+
+Within this shared memory, I create a pthreads_mutex_t. I believe there are also
+semaphores made specifically for processes in POSIX but I am more familiar with
+pthreads. Whenever the child processes need to start sending anything to the
+server, they acquire the mutex and release it after they are finished receiving
+from the server. I am a bit concerned with the cleanup of the mutex when one of
+these child processes is killed, however the use of the signal handler should
+allow all the resources of the child to be reclaimed. Managing the lifetimes
+of these shared resources is really annoying, but there should not be a memory
+leak at the very least. The child processes should be using everything it has
+allocated to it, and when it is killed, those resources should be released, so
+it is not like there are any resources not being used that are still being owned
+by the children.
+
+TCP Client
+
+The TCP client is also essentially identical to Beej's template, except for the
+fact that it runs a loop on getline in order to continuously get input from the
+user. When it is run, it connects to the given hostname and port and will start
+sending the messages it gets from stdin to its server (which may or may not be
+one of the two proxies) as length and then the buffer. After it will call
+recvloop to get the length and then the response before outputting it to stdout.
+The actual code is incredibly simple, it just once again becomes incredibly 
+dense due to all the error checking.
+
+The only real addition I think needs to be properly explained is the realloc of
+the buffer if the length is greater than or equal to four.
+This is due to the fact that if the length of the response is less than four,
+that means there was never any replacement done by the proxy. If "RH" is detected,
+that means that the buffer originally sent was at least two bytes long, and if
+it is then replaced then it will at minimum require a total of four bytes to fit
+the string "RBEI" so if the needed length is less than four than there will
+never be a need to resize the buffer. However, for redundancy's sake I will reallocate
+the buffer to four bytes in case there could be some future proxy that would
+take a single character and replace it with two character for example. I am not
+entirely sure how getline's allocation works so I am doing this just in case
+because realloc seems to fail on allocation sizes less than four bytes yet
+getline can take a single character and allocate a buffer to it.
