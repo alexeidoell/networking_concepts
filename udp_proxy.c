@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
 
     if (p == NULL) {
         fprintf(stderr, "udp proxy: failed to create socket\n");
-        return 2;
+        return 1;
     }
 
 
@@ -74,6 +74,7 @@ int main(int argc, char *argv[])
 
     if ((rv = getaddrinfo(NULL, PROXYPORT, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        freeaddrinfo(servinfo);
         return 1;
     }
 
@@ -101,15 +102,20 @@ int main(int argc, char *argv[])
     }
 
 
+
     if (prx == NULL)  {
         fprintf(stderr, "udp proxy: failed to bind\n");
+        freeaddrinfo(servinfo);
         exit(1);
     }
 
     if (listen(listenfd, BACKLOG) == -1) {
         perror("listen");
+        freeaddrinfo(servinfo);
         exit(1);
     }
+
+    freeaddrinfo(servinfo);
 
     sa.sa_handler = sigchld_handler; // reap all dead processes
     sigemptyset(&sa.sa_mask);

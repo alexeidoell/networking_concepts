@@ -114,7 +114,7 @@ int main(void)
                         exit(0);
                 }
                 expected = ntohl(expected);
-                if (!(msg = realloc(msg, expected))) {
+                if (!(msg = realloc(msg, expected + 1))) {
                     perror("realloc");
                     close(new_fd);
                     exit(1);

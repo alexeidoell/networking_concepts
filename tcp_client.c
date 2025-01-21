@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
     int return_code = 0;
 
     if (argc != 3) {
-        fprintf(stderr,"usage: client hostname port\n");
+        fprintf(stderr,"usage: tcp_client hostname port\n");
         exit(1);
     }
 
@@ -30,6 +30,7 @@ int main(int argc, char *argv[])
 
     if ((rv = getaddrinfo(argv[1], argv[2], &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        freeaddrinfo(servinfo);
         return 1;
     }
 
@@ -52,7 +53,8 @@ int main(int argc, char *argv[])
 
     if (p == NULL) {
         fprintf(stderr, "client: failed to connect\n");
-        return 2;
+    freeaddrinfo(servinfo); // all done with this structure
+        return 1;
     }
 
     inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
@@ -95,7 +97,7 @@ int main(int argc, char *argv[])
         // to a size smaller than 4, but for the sake of avoiding a buffer
         // overflow just in case I will allocate a minimum of 4
         if (len >= 4) {
-            if(!(line = realloc(line, len))) {
+            if(!(line = realloc(line, len + 1))) {
                 perror("realloc");
                 return_code = 1;
                 goto cleanup;

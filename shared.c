@@ -45,7 +45,7 @@ int replacement(char* str, size_t len, char** result) {
         return -1;
     }
 
-    char* outstr = realloc(*result, len);
+    char* outstr = realloc(*result, len + 1);
     if (outstr == NULL) {
         return -1;
     }
@@ -64,7 +64,7 @@ int replacement(char* str, size_t len, char** result) {
         } else {
             if (curr == 'H') {
                 // found pattern to replace
-                outstr = realloc(outstr, len + 2 + (count << 1));
+                outstr = realloc(outstr, len + 3 + (count << 1));
                 if (outstr == NULL) {
                     return -1;
                 }

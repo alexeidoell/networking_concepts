@@ -46,6 +46,7 @@ int main(int argc, char *argv[])
 
     if ((rv = getaddrinfo(argv[1], argv[2], &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        freeaddrinfo(servinfo);
         return 1;
     }
 
@@ -66,9 +67,11 @@ int main(int argc, char *argv[])
         break;
     }
 
+
     if (p == NULL) {
         fprintf(stderr, "tcp proxy: failed to connect\n");
-        return 2;
+        freeaddrinfo(servinfo);
+        return 1;
     }
 
     inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
@@ -84,6 +87,7 @@ int main(int argc, char *argv[])
 
     if ((rv = getaddrinfo(NULL, PROXYPORT, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        freeaddrinfo(servinfo);
         return 1;
     }
 
@@ -110,17 +114,20 @@ int main(int argc, char *argv[])
         break;
     }
 
-    freeaddrinfo(servinfo); // all done with this structure
 
     if (p == NULL)  {
         fprintf(stderr, "tcp proxy: failed to bind\n");
+        freeaddrinfo(servinfo);
         exit(1);
     }
 
     if (listen(listenfd, BACKLOG) == -1) {
         perror("listen");
+        freeaddrinfo(servinfo);
         exit(1);
     }
+
+    freeaddrinfo(servinfo);
 
     sa.sa_handler = sigchld_handler; // reap all dead processes
     sigemptyset(&sa.sa_mask);
@@ -184,7 +191,7 @@ int main(int argc, char *argv[])
                 }
                 expected = ntohl(expected);
                 // get msg from client
-                if (!(msg = realloc(msg, expected))) {
+                if (!(msg = realloc(msg, expected + 1))) {
                     perror("realloc");
                     close(new_fd);
                     exit(1);
@@ -233,6 +240,11 @@ int main(int argc, char *argv[])
                         exit(0);
                 }
                 expected = ntohl(expected);
+                if (!(msg = realloc(msg, expected + 1))) {
+                    perror("realloc");
+                    close(new_fd);
+                    exit(1);
+                }
                 switch (recvloop(servfd, msg, expected)) {
                     case -1:
                         perror("recv");

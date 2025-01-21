@@ -112,7 +112,8 @@ of these shared resources is really annoying, but there should not be a memory
 leak at the very least. The child processes should be using everything it has
 allocated to it, and when it is killed, those resources should be released, so
 it is not like there are any resources not being used that are still being owned
-by the children.
+by the children. (also I checked it all in valgrind and all heap memory is still
+reachable so there's no *real* memory leak)
 
 TCP Client
 
