@@ -12,6 +12,10 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <shared.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <pthread.h>
 
 #define PROXYPORT "34923"
 
@@ -40,7 +44,8 @@ void *get_in_addr(struct sockaddr *sa)
 int main(int argc, char *argv[])
 {
     int servfd;
-    int listenfd, new_fd;  // listen on sock_fd, new connection on new_fd
+    int listenfd, new_fd, mtxfd;  // listen on sock_fd, new connection on new_fd
+    pthread_mutex_t* mutex;
     struct addrinfo hints, *servinfo, *p, *prx;
     struct sockaddr_storage their_addr; // connector's address information
     socklen_t sin_size;
@@ -133,6 +138,30 @@ int main(int argc, char *argv[])
         perror("sigaction");
         exit(1);
     }
+
+    mtxfd = shm_open("cka067 udp mutex", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+    if (mtxfd == -1) {
+        perror("shm_open");
+        printf("udp proxy: shm_open failed to create memory for mutex\n");
+        exit(1);
+    }
+    if (ftruncate(mtxfd, sizeof(pthread_mutex_t)) == -1) {
+        perror("ftruncate");
+        printf("udp proxy: ftruncate failed to create memory for mutex\n");
+        exit(1);
+    }
+    mutex = mmap(NULL, sizeof(pthread_mutex_t), PROT_WRITE | PROT_READ, MAP_SHARED, mtxfd, 0);
+    if (mutex == MAP_FAILED) {
+        perror("mmap");
+        printf("udp proxy: failed to map memory for mutex\n");
+        exit(1);
+    }
+    close(mtxfd);
+    // fd no longer needed and the memory is mapped
+    pthread_mutex_init(mutex, 0);
+
+
+
     printf("udp proxy: waiting for connections...\n");
 
     while(1) {  // main accept() loop
@@ -185,15 +214,7 @@ int main(int argc, char *argv[])
                     close(new_fd);
                     exit(0);
                 default:
-                    if (sendto(servfd, &networkbytes, sizeof networkbytes, 0,
-                                    p->ai_addr, p->ai_addrlen) == -1) {
-                        if (errno == EPIPE) {
-                            printf("udp proxy: lost server connection to %s\n", s);
-                        } else {
-                            perror("send");
-                        }
-                        goto cleanup;
-                    }
+                    pthread_mutex_lock(mutex);
                     if (sendto(servfd, msg, expected, 0,
                                     p->ai_addr, p->ai_addrlen) == -1) {
                         if (errno == EPIPE) {
@@ -204,31 +225,25 @@ int main(int argc, char *argv[])
                         goto cleanup;
                     }
                 }
-                recvstatus = recvfrom(servfd, &expected, sizeof expected, 0,
-                        p->ai_addr, &p->ai_addrlen);
-                expected = ntohl(expected);
-                switch (recvstatus) {
-                case -1:
-                    perror("recv");
-                    goto cleanup;
-                case 0:
-                    printf("udp proxy: server connection from %s closed\n", s);
-                    goto cleanup;
-                }
                 // get msg from server
                 numbytes = recvfrom(servfd, msg, expected, 0,
                         p->ai_addr, &p->ai_addrlen);
                 switch (numbytes) {
                 case -1:
-                    perror("recv");
+                    perror("recvfrom");
                     goto cleanup;
                 case 0:
                     printf("udp proxy: server connection from %s closed\n", s);
                     goto cleanup;
                 default:
+                    pthread_mutex_unlock(mutex);
+                    if (expected != numbytes) {
+                        printf("udp proxy: lost bytes in communication with server\n");
+                        goto cleanup;
+                    }
                     expected = replacement(msg, expected, &replacedstr);
                     if (expected == -1) {
-                        printf("tcp proxy: character replacement failed\n");
+                        printf("udp proxy: character replacement failed\n");
                         close(new_fd);
                         exit(0);
                     }
@@ -264,11 +279,14 @@ cleanup:
             if (replacedstr) {
                 free(replacedstr);
             }
-            // for some reason if i don't put \n it doesn't print this line
-            // but there is still an empty line :(
-            printf("udp proxy: exiting due to loss of connection to server\n");
-            kill(0, SIGINT);
-
+            // there is no safe time to destroy the mutex
+            // but it should be fine as the parent process
+            // will need to continue to give it to its children
+            // until the entire proxy is killed and the memory
+            // will be reclaimed by the os
+            pthread_mutex_unlock(mutex);
+            munmap(mutex, sizeof(pthread_mutex_t));
+            exit(1);
         }
         close(new_fd);  // parent doesn't need this
     }

@@ -13,6 +13,7 @@
 #include <shared.h>
 
 #define MYPORT "34922"    // the port users will be connecting to
+#define MAXLEN 256
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -69,42 +70,19 @@ int main(void)
 
     addr_len = sizeof their_addr;
 
-    char* msg = NULL;
-    int32_t expected = 0;
-    ssize_t recvstatus;
+    char msg[MAXLEN];
 
     while (1) {
-        recvstatus = recvfrom(sockfd, &expected, sizeof expected, 0,
+        numbytes = recvfrom(sockfd, msg, MAXLEN, 0,
                 (struct sockaddr*)&their_addr, &addr_len);
-        expected = ntohl(expected);
-        switch (recvstatus) {
-            case -1:
-                perror("recv");
-                close(sockfd);
-                exit(1);
-        }
-        if (!(msg = realloc(msg, expected))) {
-            perror("realloc");
-            close(sockfd);
-            exit(1);
-        }
-        numbytes = recvfrom(sockfd, msg, expected, 0,
-                (struct sockaddr*)&their_addr, &addr_len);
-        int32_t networkbytes = htonl(expected);
         switch (numbytes) {
             case -1:
-                perror("recv");
+                perror("recvfrom");
                 close(sockfd);
                 exit(1);
             default:
-                cipher(msg, expected);
-                if (sendto(sockfd, &networkbytes, sizeof networkbytes, 0,
-                                (struct sockaddr*)&their_addr, addr_len) == -1) {
-                    perror("send");
-                    close(sockfd);
-                    exit(1);
-                }
-                if (sendto(sockfd, msg, expected, 0,
+                cipher(msg, numbytes);
+                if (sendto(sockfd, msg, numbytes, 0,
                                 (struct sockaddr*)&their_addr, addr_len) == -1) {
                     perror("send");
                     close(sockfd);
