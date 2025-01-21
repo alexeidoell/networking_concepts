@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <errno.h>
+#include <sys/wait.h>
 
 int cipher(char *str, size_t len) {
 
@@ -37,13 +39,13 @@ int cipher(char *str, size_t len) {
 // takes the address of a pointer so length and newly allocated string
 // can be returned (*result) must be null
 // str param needs to be freed after by caller
-ssize_t replacement(char* str, size_t len, char** result) {
+int replacement(char* str, size_t len, char** result) {
 
     if (str == NULL || len == 0) {
         return -1;
     }
 
-    char* outstr = malloc(len);
+    char* outstr = realloc(*result, len);
     if (outstr == NULL) {
         return -1;
     }
@@ -96,3 +98,26 @@ int recvloop(int fd, void* buf, size_t expected) {
     }
     return readbytes;
 }
+
+// get sockaddr, IPv4 or IPv6:
+void *get_in_addr(struct sockaddr *sa)
+{
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in*)sa)->sin_addr);
+    }
+
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+void sigchld_handler(int s __attribute__((unused)))
+{
+    // waitpid() might overwrite errno, so we save and restore it:
+    int saved_errno = errno;
+
+    while(waitpid(-1, NULL, WNOHANG) > 0);
+
+    errno = saved_errno;
+}
+
+
+

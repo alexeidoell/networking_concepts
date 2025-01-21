@@ -1,6 +1,5 @@
 Alexei Doell cka067 11345642
 
-
 Goals
 
 I need to make a TCP server, proxy and client, as well as a UDP server and
@@ -41,6 +40,9 @@ a char* as an out parameter. Within replacement, there is a buffer that is mallo
 to fit the size of the replacement string with RH->RBEI completed, which is then 
 placed into the out parameter. The function returns -1 in an error, or the new 
 length of the string, to be used as a length for future send calls.
+
+As well, the two helper functions given in Beej's templates are placed into
+shared.c.
 
 TCP Server
 
@@ -136,3 +138,31 @@ take a single character and replace it with two character for example. I am not
 entirely sure how getline's allocation works so I am doing this just in case
 because realloc seems to fail on allocation sizes less than four bytes yet
 getline can take a single character and allocate a buffer to it.
+
+UDP Server
+
+The UDP server is by far the most simple program of the assignment. It simply
+binds to a port and loops on recvfrom to receive messages. Unlike the TCP portions,
+all it  receives is a buffer up to a certain length (256, because the real max seems
+to be 512 for a UDP packet and this leaves some breathing room, but really it's
+255 due to me sending the newline as well) and uses the return value of recvfrom 
+as a length. It uses the length and the buffer to call caesar and then it just
+sends the message back to the sender that was given to it in the recvfrom call 
+using sendto. The main difference from the TCP server is the fact that it uses 
+a fixed size buffer rather than a allocated buffer. This just makes more sense 
+for UDP due to it not being a bytestream, but requires both ends to ensure they 
+don't send more than the max buffer length.
+
+UDP Proxy
+
+The UDP proxy runs similarly to the TCP proxy in that it forks child processes
+that are given clients that connect to the port that it listens on. However,
+instead of connecting to the TCP server beforehand, it simply creates an fd that
+is assigned to the port the UDP server is receiving from. Like the TCP proxy,
+all the child processes will share this fd and thus have a mutex just like the
+one in the TCP proxy. The child processes will wait on a recvloop and after
+receiving a message, they will send the message in a single chunk to the UDP
+server without sending a length first. After, like the UDP server, it just receives
+the full response without getting a length from the UDP server, which it calls
+replacement on, then sends the new string to its client.
+

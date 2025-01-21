@@ -18,27 +18,6 @@
 
 #define BACKLOG 10   // how many pending connections queue will hold
 
-void sigchld_handler(int s __attribute__((unused)))
-{
-    // waitpid() might overwrite errno, so we save and restore it:
-    int saved_errno = errno;
-
-    while(waitpid(-1, NULL, WNOHANG) > 0);
-
-    errno = saved_errno;
-}
-
-
-// get sockaddr, IPv4 or IPv6:
-void *get_in_addr(struct sockaddr *sa)
-{
-    if (sa->sa_family == AF_INET) {
-        return &(((struct sockaddr_in*)sa)->sin_addr);
-    }
-
-    return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
-
 int main(void)
 {
     int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd

@@ -30,7 +30,9 @@ hosted on tux7 on port 34920.
 
 In the client, a line will be sent to the proxy/server that the client is
 connected to when a newline is inputted. If the line is empty except for the
-newline, the client will close.
+newline, the client will close. When connecting to the UDP server/proxy, ensure
+that you do not send more than 255 characters, as that is the max message length
+that they can handle.
 
 The servers and proxies cannot be closed through user input and will continue
 to run until forcefully closed e.g. the processes are sent a sigkill.

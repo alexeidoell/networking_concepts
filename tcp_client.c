@@ -9,18 +9,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <shared.h>
-
 #include <arpa/inet.h>
-
-// get sockaddr, IPv4 or IPv6:
-void *get_in_addr(struct sockaddr *sa)
-{
-    if (sa->sa_family == AF_INET) {
-        return &(((struct sockaddr_in*)sa)->sin_addr);
-    }
-
-    return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
 
 int main(int argc, char *argv[])
 {
@@ -103,15 +92,23 @@ int main(int argc, char *argv[])
         len = ntohl(len);
         // if len is less than 4 then this never matters, because
         // that means RH was not replaced, as well we cannot realloc
-        // to a size smaller than 4
+        // to a size smaller than 4, but for the sake of avoiding a buffer
+        // overflow just in case I will allocate a minimum of 4
         if (len >= 4) {
             if(!(line = realloc(line, len))) {
                 perror("realloc");
                 return_code = 1;
                 goto cleanup;
             }
+            alloc = len;
+        } else {
+            if(!(line = realloc(line, 4))) {
+                perror("realloc");
+                return_code = 1;
+                goto cleanup;
+            }
+            alloc = 4;
         }
-        alloc = len;
         switch(recvloop(sockfd, line, len)) {
             case -1:
                 perror("recv");
@@ -121,6 +118,7 @@ int main(int argc, char *argv[])
                 printf("client: connection closed by server\n");
                 goto cleanup;
             default:
+                // just in case
                 line[len] = '\0';
                 printf("%s", line);
         }
