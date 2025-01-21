@@ -144,7 +144,8 @@ int main(void)
                 }
             }
         }
-        close(new_fd);  // parent doesn't need this
+        close(new_fd);  // parent doesn't need this but also this will probably
+                        // never actually ever be called
     }
 
     return 0;
