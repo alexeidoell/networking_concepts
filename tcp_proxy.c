@@ -1,6 +1,5 @@
 // Alexei Doell cka067 11345642
 
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -17,6 +16,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <pthread.h>
 
 #define PROXYPORT "34921"
 
@@ -151,17 +151,25 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    mtxfd = shm_open("tcp mutex", O_CREAT | O_RDWR | O_TRUNC, 0);
+    mtxfd = shm_open("cka067 tcp mutex", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+    if (mtxfd == -1) {
+        perror("shm_open");
+        printf("tcp proxy: shm_open failed to create memory for mutex\n");
+        exit(1);
+    }
     if (ftruncate(mtxfd, sizeof(pthread_mutex_t)) == -1) {
-        printf("tcp proxy: failed to create mutex\n");
+        perror("ftruncate");
+        printf("tcp proxy: ftruncate failed to create memory for mutex\n");
         exit(1);
     }
     mutex = mmap(NULL, sizeof(pthread_mutex_t), PROT_WRITE | PROT_READ, MAP_SHARED, mtxfd, 0);
     if (mutex == MAP_FAILED) {
-        printf("tcp proxy: failed to create mutex\n");
+        perror("mmap");
+        printf("tcp proxy: failed to map memory for mutex\n");
         exit(1);
     }
     close(mtxfd);
+    // fd no longer needed and the memory is mapped
     pthread_mutex_init(mutex, 0);
 
     printf("tcp proxy: waiting for connections...\n");
@@ -223,6 +231,7 @@ int main(int argc, char *argv[])
                     } else {
                         perror("send");
                     }
+                    pthread_mutex_unlock(mutex);
                     goto cleanup;
                 }
                 if (send(servfd, msg, expected, MSG_NOSIGNAL) == -1) {
@@ -231,6 +240,7 @@ int main(int argc, char *argv[])
                     } else {
                         perror("send");
                     }
+                    pthread_mutex_unlock(mutex);
                     goto cleanup;
                 }
                 switch (recvloop(servfd, &expected, sizeof expected)) {
@@ -292,7 +302,12 @@ cleanup:
             if (replacedstr) {
                 free(replacedstr);
             }
-            pthread_mutex_destroy(mutex);
+            // can destroy the mutex because im planning on killing the
+            // entire proxy due to its loss of connection to the tcp server
+            // but im not sure if it even matters at all because all the processes
+            // under the proxy will be killed and the memory will be reclaimed
+            // by the os so ill just unmap to avoid the ub that comes from
+            // potentially destroying a locked mutex
             munmap(mutex, sizeof(pthread_mutex_t));
             // for some reason if i don't put \n it doesn't print this line
             // but there is still an empty line :(
