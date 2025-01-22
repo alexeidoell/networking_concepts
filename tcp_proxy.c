@@ -265,7 +265,6 @@ int main(int argc, char *argv[])
                     exitcode = 1;
                     goto cleanup;
                 }
-                // need to actually check this return value
                 networkbytes = htonl(expected);
                 if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
                     perror("send");
