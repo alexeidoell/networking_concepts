@@ -59,7 +59,7 @@ We will always expect a 32bit integer first, then can get exactly that number
 of bytes after. Using this integer, I realloc the message buffer in the server
 to fit the message and then call recvloop again to get the message from the client.
 
-Once the message is received, caesar is called on the messag. The process then
+Once the message is received, caesar is called on the message. The process then
 sends the length of the message, and then the message itself to its client.
 
 Overall, the TCP server is quite simple, it just becomes quite dense due to
@@ -105,15 +105,23 @@ Within this shared memory, I create a pthreads_mutex_t. I believe there are also
 semaphores made specifically for processes in POSIX but I am more familiar with
 pthreads. Whenever the child processes need to start sending anything to the
 server, they acquire the mutex and release it after they are finished receiving
-from the server. I am a bit concerned with the cleanup of the mutex when one of
-these child processes is killed, however the use of the signal handler should
-allow all the resources of the child to be reclaimed. Managing the lifetimes
-of these shared resources is really annoying, but there should not be a memory
-leak at the very least. The child processes should be using everything it has
+from the server. I am a bit concerned with the cleanup of the mutex when the entire
+proxy is killed. However, the child processes should be using everything it has
 allocated to it, and when it is killed, those resources should be released, so
 it is not like there are any resources not being used that are still being owned
 by the children. (also I checked it all in valgrind and all heap memory is still
 reachable so there's no *real* memory leak)
+
+Perhaps my idea of killing every single process associated with the proxy is not
+a good idea, but it makes the most sense to me. I'm not sure if signals are 
+necessarily good practice, but I think it just makes the most sense to destroy 
+the entire proxy if the server connection is lost because it's not like the proxy
+is going to be able to reconnect to it, so I want the proxy to be killed and I
+do not think there is a better way to do so because we want the signal handler to
+restart syscalls after the signal is handled. This means the parent proxy process
+will just go back to blocking on accept() and I cannot tell it to exit without
+changing the SA_RESTART flag within the signal handler which is significantly worse
+than just killing the process with a SIGINT.
 
 TCP Client
 
@@ -144,7 +152,7 @@ UDP Server
 
 The UDP server is by far the most simple program of the assignment. It simply
 binds to a port and loops on recvfrom to receive messages. Unlike the TCP portions,
-all it  receives is a buffer up to a certain length (256, because the real max seems
+all it receives is a buffer up to a certain length (256, because the real max seems
 to be 512 for a UDP packet and this leaves some breathing room, but really it's
 255 due to me sending the newline as well) and uses the return value of recvfrom 
 as a length. It uses the length and the buffer to call caesar and then it just
@@ -166,4 +174,22 @@ receiving a message, they will send the message in a single chunk to the UDP
 server without sending a length first. After, like the UDP server, it just receives
 the full response without getting a length from the UDP server, which it calls
 replacement on, then sends the new string to its client.
+
+The UDP proxy will split messages it receives into chunks less than 256 bytes,
+and sends each one to the server to allow for non fixed sized messages. This
+makes the TCP client not have to make any considerations for whether the proxy
+it connects to sending to a UDP or TCP server.
+
+Unlike the TCP proxy, there is not a good way to tell if the UDP proxy is actually
+able to send stuff to the server, because if the server does not exist, the UDP
+proxy will just send the messages to the port, and there will never be anything
+that can respond to the recvfrom call. However, the upside to this is that if
+the server goes down, it can just be restarted without needing to also restart
+the proxy. What I did to take advantage of this, was putting a timeout on my
+recvfrom call in the UDP proxy that will wait 15 seconds. Once those have passed
+without any response from the UDP server, it will close the connection with the
+client and print out a message on the proxy side stating that the connection with
+the server has been lost (or perhaps it never even existed). This way, the UDP
+proxy can be made functional again very easily even if the UDP server goes down,
+simply by restarting the server.
 

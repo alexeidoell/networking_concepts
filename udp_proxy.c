@@ -26,15 +26,15 @@ int main(int argc, char *argv[])
     int servfd;
     int listenfd, new_fd, mtxfd;  // listen on sock_fd, new connection on new_fd
     pthread_mutex_t* mutex;
-    struct addrinfo hints, *servinfo, *p, *prx;
+    struct addrinfo hints, *servinfo, *p, *prx, *portinfo;
     struct sockaddr_storage their_addr; // connector's address information
     socklen_t sin_size;
     int yes=1;
     struct sigaction sa;
     char c[INET6_ADDRSTRLEN];
-    char s[INET6_ADDRSTRLEN];
     int rv;
     int numbytes;
+    int exitcode = 0;
 
     if (argc != 3) {
         fprintf(stderr,"usage: udp_proxy hostname server_port\n");
@@ -66,20 +66,29 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // giving the udp recvfrom a timeout just in case the udp server dies
+    struct timeval tv;
+    tv.tv_sec = 15;
+    tv.tv_usec = 0;
+    if (setsockopt(servfd, SOL_SOCKET, SO_RCVTIMEO, &tv,
+                sizeof(struct timeval)) == -1) {
+        perror("setsockopt");
+        exit(1);
+    }
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE; // use my IP
 
-    if ((rv = getaddrinfo(NULL, PROXYPORT, &hints, &servinfo)) != 0) {
+    if ((rv = getaddrinfo(NULL, PROXYPORT, &hints, &portinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        freeaddrinfo(servinfo);
+        freeaddrinfo(portinfo);
         return 1;
     }
 
     // loop through all the results and bind to the first we can
-    for(prx = servinfo; prx != NULL; prx = prx->ai_next) {
+    for(prx = portinfo; prx != NULL; prx = prx->ai_next) {
         if ((listenfd = socket(prx->ai_family, prx->ai_socktype,
                 prx->ai_protocol)) == -1) {
             perror("udp proxy: socket");
@@ -105,17 +114,17 @@ int main(int argc, char *argv[])
 
     if (prx == NULL)  {
         fprintf(stderr, "udp proxy: failed to bind\n");
-        freeaddrinfo(servinfo);
+        freeaddrinfo(portinfo);
         exit(1);
     }
 
     if (listen(listenfd, BACKLOG) == -1) {
         perror("listen");
-        freeaddrinfo(servinfo);
+        freeaddrinfo(portinfo);
         exit(1);
     }
 
-    freeaddrinfo(servinfo);
+    freeaddrinfo(portinfo);
 
     sa.sa_handler = sigchld_handler; // reap all dead processes
     sigemptyset(&sa.sa_mask);
@@ -146,9 +155,7 @@ int main(int argc, char *argv[])
     // fd no longer needed and the memory is mapped
     pthread_mutex_init(mutex, 0);
 
-
-
-    printf("udp proxy: waiting for connections...\n");
+    printf("udp proxy: waiting for connections on port %s\n", PROXYPORT);
 
     while(1) {  // main accept() loop
         sin_size = sizeof their_addr;
@@ -159,8 +166,8 @@ int main(int argc, char *argv[])
         }
 
         inet_ntop(their_addr.ss_family,
-            get_in_addr((struct sockaddr *)&their_addr),
-            c, sizeof c);
+                get_in_addr((struct sockaddr *)&their_addr),
+                c, sizeof c);
         printf("udp proxy: got connection from %s\n", c);
 
         if (!fork()) { // this is the child process
@@ -169,114 +176,126 @@ int main(int argc, char *argv[])
             char* replacedstr = NULL;
             int32_t recvstatus;
             int32_t expected;
+            int32_t sentbytes;
             while (1) {
                 recvstatus = recv(new_fd, &expected, sizeof expected, 0);
                 expected = ntohl(expected);
                 switch (recvstatus) {
-                case -1:
-                    perror("recv");
-                    close(new_fd);
-                    exit(1);
-                case 0:
-                    printf("udp proxy: connection from %s closed\n", c);
-                    close(new_fd);
-                    exit(0);
+                    case -1:
+                        perror("recv");
+                        exitcode = 1;
+                        goto cleanup;
+                    case 0:
+                        printf("udp proxy: connection from %s closed\n", c);
+                        goto cleanup;
                 }
                 // get msg from client
-                if (!(msg = realloc(msg, expected))) {
+                if (!(msg = realloc(msg, expected + 1))) {
                     perror("realloc");
-                    close(new_fd);
-                    exit(1);
+                    exitcode = 1;
+                    goto cleanup;
                 }
                 numbytes = recv(new_fd, msg, expected, 0);
-                int32_t networkbytes = htonl(numbytes);
                 switch (numbytes) {
-                case -1:
-                    perror("recv");
-                    close(new_fd);
-                    exit(1);
-                case 0:
-                    printf("udp proxy: client connection from %s closed\n", c);
-                    close(new_fd);
-                    exit(0);
-                default:
+                    case -1:
+                        perror("recv");
+                        exitcode = 1;
+                        goto cleanup;
+                    case 0:
+                        printf("udp proxy: client connection from %s closed\n", c);
+                        goto cleanup;
+                }
+                sentbytes = 0;
+                size_t sending = 0;
+                while (sentbytes < expected - 1) {
+                    // send segments of MAXLEN until there is only
+                    // a segment smaller than MAXLEN remaining
+                    if (expected - sentbytes < MAXLEN) {
+                        sending = expected - sentbytes - 1;
+                    } else {
+                        sending = MAXLEN;
+                    }
                     pthread_mutex_lock(mutex);
-                    if (sendto(servfd, msg, expected, 0,
-                                    p->ai_addr, p->ai_addrlen) == -1) {
+                    if (sendto(servfd, msg + sentbytes, sending, 0,
+                                p->ai_addr, p->ai_addrlen) == -1) {
                         if (errno == EPIPE) {
-                            printf("udp proxy: lost server connection to %s\n", s);
+                            printf("udp proxy: lost server connection\n");
+                            printf("udp proxy: please reopen server on %s:%s\n", argv[1], argv[2]);
                         } else {
                             perror("send");
                         }
+                        exitcode = 1;
+                        pthread_mutex_unlock(mutex);
                         goto cleanup;
                     }
-                }
-                // get msg from server
-                numbytes = recvfrom(servfd, msg, expected, 0,
-                        p->ai_addr, &p->ai_addrlen);
-                switch (numbytes) {
-                case -1:
-                    perror("recvfrom");
-                    goto cleanup;
-                case 0:
-                    printf("udp proxy: server connection from %s closed\n", s);
-                    goto cleanup;
-                default:
+                    // get msg from server
+                    numbytes = recvfrom(servfd, msg + sentbytes, sending, 0,
+                            p->ai_addr, &p->ai_addrlen);
                     pthread_mutex_unlock(mutex);
-                    if (expected != numbytes) {
-                        printf("udp proxy: lost bytes in communication with server\n");
+                    if (numbytes == -1) {
+                        if (errno == EAGAIN) {
+                            // this path will be taken if the recvfrom times
+                            // out after 15 seconds
+                            printf("udp proxy: lost server connection\n");
+                            printf("udp proxy: please reopen server on %s:%s\n", argv[1], argv[2]);
+                        } else {
+                            perror("recvfrom");
+                        }
+                        exitcode = 1;
                         goto cleanup;
                     }
-                    expected = replacement(msg, expected, &replacedstr);
-                    if (expected == -1) {
-                        printf("udp proxy: character replacement failed\n");
-                        close(new_fd);
-                        exit(0);
-                    }
-                    // need to actually check this return value
-                    networkbytes = htonl(expected);
-                    if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
-                        perror("send");
-                        if (errno == EPIPE) {
-                            printf("udp proxy: lost client connection to %s\n", c);
-                        } else {
-                            perror("send");
-                        }
-                        close(new_fd);
-                        exit(0);
-                    }
-                    if (send(new_fd, replacedstr, expected, MSG_NOSIGNAL) == -1) {
-                        if (errno == EPIPE) {
-                            printf("udp proxy: lost client connection to %s\n", c);
-                        } else {
-                            perror("send");
-                        }
-                        close(new_fd);
-                        exit(0);
-                    }
+                    sentbytes += sending;
                 }
-
+                expected = replacement(msg, expected, &replacedstr);
+                if (expected == -1) {
+                    printf("udp proxy: character replacement failed\n");
+                    exitcode = 1;
+                    goto cleanup;
+                }
+                // need to actually check this return value
+                int32_t networkbytes = htonl(expected);
+                if (send(new_fd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
+                    perror("send");
+                    if (errno == EPIPE) {
+                        printf("udp proxy: lost client connection to %s\n", c);
+                    } else {
+                        perror("send");
+                        exitcode = 1;
+                    }
+                    goto cleanup;
+                }
+                if (send(new_fd, replacedstr, expected, MSG_NOSIGNAL) == -1) {
+                    if (errno == EPIPE) {
+                        printf("udp proxy: lost client connection to %s\n", c);
+                    } else {
+                        perror("send");
+                        exitcode = 1;
+                    }
+                    goto cleanup;
+                }
             }
+
 
 cleanup:
-            close(servfd);
-            close(new_fd);
-            free(msg);
-            if (replacedstr) {
-                free(replacedstr);
-            }
-            // there is no safe time to destroy the mutex
-            // but it should be fine as the parent process
-            // will need to continue to give it to its children
-            // until the entire proxy is killed and the memory
-            // will be reclaimed by the os
-            pthread_mutex_unlock(mutex);
-            munmap(mutex, sizeof(pthread_mutex_t));
-            exit(1);
+        close(servfd);
+        close(new_fd);
+        free(msg);
+        freeaddrinfo(servinfo);
+        if (replacedstr) {
+            free(replacedstr);
         }
-        close(new_fd);  // parent doesn't need this
+        // there is no safe time to destroy the mutex
+        // but it should be fine as the parent process
+        // will need to continue to give it to its children
+        // until the entire proxy is killed and the memory
+        // will be reclaimed by the os
+        munmap(mutex, sizeof(pthread_mutex_t));
+        exit(exitcode);
     }
-    close(servfd);
+    close(new_fd);  // parent doesn't need this
+}
+close(servfd);
+freeaddrinfo(servinfo);
 
-    return 0;
+return 0;
 }

@@ -7,7 +7,7 @@
 #include <netdb.h>
 
 #define OFFSET 15
-#define MAXLEN 256
+#define MAXLEN 8
 
 int cipher(char *str, size_t len);
 int replacement(char* str, size_t len, char** result);

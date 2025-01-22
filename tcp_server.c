@@ -82,7 +82,7 @@ int main(void)
         exit(1);
     }
 
-    printf("tcp server: waiting for connections...\n");
+    printf("tcp server: waiting for connections on %s\n", PORT);
 
     while(1) {  // main accept() loop
         sin_size = sizeof their_addr;

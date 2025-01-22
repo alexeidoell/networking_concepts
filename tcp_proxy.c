@@ -33,6 +33,7 @@ int main(int argc, char *argv[])
     int yes=1;
     char s[INET6_ADDRSTRLEN], c[INET6_ADDRSTRLEN];
     int rv;
+    int exitcode = 0;
 
 
     if (argc != 3) {
@@ -158,7 +159,7 @@ int main(int argc, char *argv[])
     // fd no longer needed and the memory is mapped
     pthread_mutex_init(mutex, 0);
 
-    printf("tcp proxy: waiting for connections...\n");
+    printf("tcp proxy: waiting for connections on %s\n", PROXYPORT);
 
     while(1) {  // main accept() loop
         sin_size = sizeof their_addr;
@@ -182,29 +183,27 @@ int main(int argc, char *argv[])
                 switch (recvloop(new_fd, &expected, sizeof expected)) {
                     case -1:
                         perror("recv");
-                        close(new_fd);
-                        exit(1);
+                        exitcode = 1;
+                        goto cleanup;
                     case 0:
                         printf("tcp proxy: connection from %s closed\n", c);
-                        close(new_fd);
-                        exit(0);
+                        goto cleanup;
                 }
                 expected = ntohl(expected);
                 // get msg from client
                 if (!(msg = realloc(msg, expected + 1))) {
                     perror("realloc");
-                    close(new_fd);
-                    exit(1);
+                        exitcode = 1;
+                        goto cleanup;
                 }
                 switch (recvloop(new_fd, msg, expected)) {
                     case -1:
                         perror("recv");
-                        close(new_fd);
-                        exit(1);
+                        exitcode = 1;
+                        goto cleanup;
                     case 0:
                         printf("tcp proxy: connection from %s closed\n", c);
-                        close(new_fd);
-                        exit(0);
+                        goto cleanup;
                 }
                 int32_t networkbytes = htonl(expected);
                 // mutex on sends to server to ensure the two messages are
@@ -214,8 +213,10 @@ int main(int argc, char *argv[])
                 if (send(servfd, &networkbytes, sizeof networkbytes, MSG_NOSIGNAL) == -1) {
                     if (errno == EPIPE) {
                         printf("tcp proxy: lost server connection to %s\n", s);
+                        exitcode = -1;
                     } else {
                         perror("send");
+                        exitcode = 1;
                     }
                     pthread_mutex_unlock(mutex);
                     goto cleanup;
@@ -223,8 +224,10 @@ int main(int argc, char *argv[])
                 if (send(servfd, msg, expected, MSG_NOSIGNAL) == -1) {
                     if (errno == EPIPE) {
                         printf("tcp proxy: lost server connection to %s\n", s);
+                        exitcode = -1;
                     } else {
                         perror("send");
+                        exitcode = 1;
                     }
                     pthread_mutex_unlock(mutex);
                     goto cleanup;
@@ -232,35 +235,35 @@ int main(int argc, char *argv[])
                 switch (recvloop(servfd, &expected, sizeof expected)) {
                     case -1:
                         perror("recv");
-                        close(new_fd);
-                        exit(1);
+                        exitcode = 1;
+                        goto cleanup;
                     case 0:
                         printf("tcp proxy: server connection from %s closed\n", s);
-                        close(new_fd);
-                        exit(0);
+                        exitcode = -1;
+                        goto cleanup;
                 }
                 expected = ntohl(expected);
                 if (!(msg = realloc(msg, expected + 1))) {
                     perror("realloc");
-                    close(new_fd);
-                    exit(1);
+                    exitcode = 1;
+                    goto cleanup;
                 }
                 switch (recvloop(servfd, msg, expected)) {
                     case -1:
                         perror("recv");
-                        close(new_fd);
-                        exit(1);
+                        exitcode = 1;
+                        goto cleanup;
                     case 0:
                         printf("tcp proxy: server connection from %s closed\n", s);
-                        close(new_fd);
-                        exit(0);
+                        exitcode = -1;
+                        goto cleanup;
                 }
                 pthread_mutex_unlock(mutex);
                 expected = replacement(msg, expected, &replacedstr);
                 if (expected == -1) {
                     printf("tcp proxy: character replacement failed\n");
-                    close(new_fd);
-                    exit(0);
+                    exitcode = 1;
+                    goto cleanup;
                 }
                 // need to actually check this return value
                 networkbytes = htonl(expected);
@@ -270,18 +273,18 @@ int main(int argc, char *argv[])
                         printf("tcp proxy: lost client connection to %s\n", c);
                     } else {
                         perror("send");
+                        exitcode = 1;
                     }
-                    close(new_fd);
-                    exit(0);
+                    goto cleanup;
                 }
                 if (send(new_fd, replacedstr, expected, MSG_NOSIGNAL) == -1) {
                     if (errno == EPIPE) {
                         printf("tcp proxy: lost client connection to %s\n", c);
                     } else {
                         perror("send");
+                        exitcode = 1;
                     }
-                    close(new_fd);
-                    exit(0);
+                    goto cleanup;
                 }
 
             }
@@ -293,17 +296,23 @@ cleanup:
             if (replacedstr) {
                 free(replacedstr);
             }
-            // can destroy the mutex because im planning on killing the
-            // entire proxy due to its loss of connection to the tcp server
-            // but im not sure if it even matters at all because all the processes
-            // under the proxy will be killed and the memory will be reclaimed
-            // by the os so ill just unmap to avoid the ub that comes from
-            // potentially destroying a locked mutex
             munmap(mutex, sizeof(pthread_mutex_t));
-            // for some reason if i don't put \n it doesn't print this line
-            // but there is still an empty line :(
-            printf("tcp proxy: exiting due to loss of connection to server\n");
-            kill(0, SIGINT);
+            if (exitcode == -1) {
+                // for some reason if i don't put \n it doesn't print this line
+                // but there is still an empty line :(
+                printf("tcp proxy: exiting due to loss of connection to server\n");
+                // can destroy the mutex because im planning on killing the
+                // entire proxy due to its loss of connection to the tcp server
+                // but im not sure if it even matters at all because all the processes
+                // under the proxy will be killed and the memory will be reclaimed
+                // by the os so ill just unmap to avoid the ub that comes from
+                // potentially destroying a locked mutex
+                kill(0, SIGINT);
+            } else {
+                // if the issue has nothing to do with the server itself
+                // ill just exit this singular child process gracefully
+                exit(exitcode);
+            }
 
         }
         close(new_fd);  // parent doesn't need this but also this will probably

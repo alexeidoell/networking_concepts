@@ -15,6 +15,9 @@ TCP proxy binds 34921
 UDP server binds 34922.
 UDP proxy binds 34923.
 
+When you run the above executables, the port they receive/listen from will
+be displayed.
+
 In order to run the servers, there are no command line arguments needed:
 $ ./tcp_server
 $ ./udp_server
@@ -25,14 +28,13 @@ $ ./tcp_proxy <hostname> <port>
 $ ./udp_proxy <hostname> <port>
 $ ./tcp_client <hostname> <port>
 
-E.g. "./tcp_proxy tux7 34920" would connect the tcp proxy to a server being
+E.g. "./tcp_proxy tux7 34920" would connect the TCP proxy to a server being
 hosted on tux7 on port 34920.
 
 In the client, a line will be sent to the proxy/server that the client is
 connected to when a newline is inputted. If the line is empty except for the
-newline, the client will close. When connecting to the UDP server/proxy, ensure
-that you do not send more than 255 characters, as that is the max message length
-that they can handle.
+newline, the client will close.
 
 The servers and proxies cannot be closed through user input and will continue
-to run until forcefully closed e.g. the processes are sent a sigkill.
+to run until an error occurs or they are forcefully closed e.g. the processes 
+are sent a sigkill.
