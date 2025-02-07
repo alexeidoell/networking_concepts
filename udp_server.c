@@ -3,42 +3,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <errno.h>
 #include <string.h>
 #include <sys/types.h>
 #include <shared.h>
 
-#define MYPORT "34922"    // the port users will be connecting to
-
-int main(void)
-{
+/* takes a port as param and does all the udp connection boiler plate syscalls */
+int bind_to(char* port) {
     int sockfd;
     struct addrinfo hints, *servinfo, *p;
     int rv;
-    int numbytes;
-    struct sockaddr_storage their_addr;
-    socklen_t addr_len;
 
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET6; // set to AF_INET to use IPv4
+    hints.ai_family = AF_INET6;
     hints.ai_socktype = SOCK_DGRAM;
 
-    if ((rv = getaddrinfo(NULL, MYPORT, &hints, &servinfo)) != 0) {
+    if ((rv = getaddrinfo(NULL, port, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        return 1;
+        fprintf(stderr, "receiver: failed on port %s, please\
+                try another port\n", port);
+        return -1;
     }
 
     // loop through all the results and bind to the first we can
     for(p = servinfo; p != NULL; p = p->ai_next) {
         if ((sockfd = socket(p->ai_family, p->ai_socktype,
                 p->ai_protocol)) == -1) {
-            perror("udp server: socket");
+            perror("receiver: socket");
             continue;
         }
 
         if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
             close(sockfd);
-            perror("udp server: bind");
+            perror("receiver: bind");
             continue;
         }
 
@@ -46,16 +42,33 @@ int main(void)
     }
 
     if (p == NULL) {
-        fprintf(stderr, "udp server: failed to bind socket\n");
-        return 2;
+        fprintf(stderr, "receiver: failed to bind socket on port %s, please "
+                "try another\n", port);
+        return -1;
     }
 
+    return sockfd;
+}
 
-    printf("udp server: waiting to recvfrom on %s\n", MYPORT);
+int main(int argc, char* argv[])
+{
+
+    int numbytes;
+    struct sockaddr_storage their_addr;
+    socklen_t addr_len;
+    char msg[MAXLEN];
+    // argv is the port given to bind to by the user
+    int sockfd = bind_to(argv[1]);
+
+    if (sockfd == -1) {
+        fprintf(stderr, "receiver: failed to bind, closing receiver\n");
+        return -1;
+    }
+
+    printf("receiver: waiting to recvfrom on %s\n", argv[1]);
 
     addr_len = sizeof their_addr;
 
-    char msg[MAXLEN];
 
     while (1) {
         numbytes = recvfrom(sockfd, msg, MAXLEN, 0,
