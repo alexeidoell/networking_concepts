@@ -6,7 +6,7 @@ CPPFLAGS = -std=gnu99 -Wall -pedantic -Wextra -fPIE
 
 .PHONY: all clean
 
-EXECUTABLES = tcp_server tcp_client tcp_proxy udp_server udp_proxy
+EXECUTABLES = udp_server udp_proxy
 
 all: $(EXECUTABLES)
 
