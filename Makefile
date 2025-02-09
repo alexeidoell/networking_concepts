@@ -7,7 +7,7 @@ CPPFLAGS = -std=gnu99 -Wall -pedantic -Wextra -fPIE
 .PHONY: all clean
 
 LISTLIB_SRC = list_adders.c list_movers.c list_removers.c list_alloc.c
-EXECUTABLES = udp_server udp_proxy
+EXECUTABLES = receiver sender
 
 all: $(EXECUTABLES)
 
@@ -49,20 +49,20 @@ $(LIB_DIR)liblist.a : $(OBJ_DIR)list_adders.o $(OBJ_DIR)list_movers.o \
 $(OBJ_DIR)shared.o : shared.c shared.h | $(OBJ_DIR)
 	$(CC) -c $(CPPFLAGS) $(CFLAGS) shared.c -o $(OBJ_DIR)shared.o
 
-$(OBJ_DIR)udp_server.o : udp_server.c | $(OBJ_DIR)
-	$(CC) -c $(CPPFLAGS) $(CFLAGS) udp_server.c -o $(OBJ_DIR)udp_server.o
+$(OBJ_DIR)receiver.o : receiver.c | $(OBJ_DIR)
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) receiver.c -o $(OBJ_DIR)receiver.o
 
-$(BIN_DIR)udp_server : $(OBJ_DIR)udp_server.o $(OBJ_DIR)shared.o | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)udp_server.o $(OBJ_DIR)shared.o -o $(BIN_DIR)udp_server
+$(BIN_DIR)receiver : $(OBJ_DIR)receiver.o $(OBJ_DIR)shared.o | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)receiver.o $(OBJ_DIR)shared.o -o $(BIN_DIR)receiver
 
-$(OBJ_DIR)udp_proxy.o : udp_proxy.c | $(OBJ_DIR)
-	$(CC) -c $(CPPFLAGS) $(CFLAGS) udp_proxy.c -o $(OBJ_DIR)udp_proxy.o -lpthread
+$(OBJ_DIR)sender.o : sender.c | $(OBJ_DIR)
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) sender.c -o $(OBJ_DIR)sender.o
 
-$(BIN_DIR)udp_proxy : $(OBJ_DIR)udp_proxy.o $(OBJ_DIR)shared.o $(LIB_DIR)liblist.a | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)udp_proxy.o $(OBJ_DIR)shared.o -o $(BIN_DIR)udp_proxy
+$(BIN_DIR)sender : $(OBJ_DIR)sender.o $(OBJ_DIR)shared.o $(LIB_DIR)liblist.a | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIB_DIRS) $(OBJ_DIR)sender.o $(OBJ_DIR)shared.o -llist -o $(BIN_DIR)sender
 
-udp_proxy : $(BIN_DIR)udp_proxy
-	ln -sf $(BIN_DIR)udp_proxy udp_proxy
+sender : $(BIN_DIR)sender
+	ln -sf $(BIN_DIR)sender sender
 
-udp_server : $(BIN_DIR)udp_server
-	ln -sf $(BIN_DIR)udp_server udp_server
+receiver : $(BIN_DIR)receiver
+	ln -sf $(BIN_DIR)receiver receiver

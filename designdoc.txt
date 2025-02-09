@@ -1,0 +1,23 @@
+Alexei Doell cka067 11345642
+
+
+Go Back N Implementation Plan:
+
+For my implementation, I will be using poll on the sender side to wait for three
+different events:
+
+ - ACK timeout
+ - an ACK from the receiver
+ - input is ready to grab from stdin
+
+Each poll call in the main poll loop will have a timeout t that is given by
+t = T - ((current time) - (time when oldest message in window was sent)) where
+T is the timeout window given by the user.
+ 
+We essentially send all the messages in the window at once so we do not need 
+any finer granularity of timing (confirmed by Derek).
+
+When we do actually receive an ACK from the receiver, we can take the sequence
+number in that ACK and use it as a cumulative ACK. This means that all of the 
+packets with a sequence number less than the number given in the 
+ACK can be removed from the message queue.
