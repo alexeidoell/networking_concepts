@@ -6,6 +6,7 @@
 #include <poll.h>
 #include <list.h>
 #include <time.h>
+#include <netdb.h>
 
 #include <shared.h>
 
@@ -65,7 +66,6 @@ int connect_to_receiver(char* hostname, char* port) {
     }
 
     freeaddrinfo(servinfo);
-
 
     return sockfd;
 }
@@ -270,7 +270,9 @@ int main(int argc, char *argv[])
 
     printf("sender: please enter message contents then hit return key to send\n");
     while(1) { 
+
         adjusted_timeout = update_timeout(timeout, outstanding_q);
+
         switch (poll_handler(poll_fds, POLL_FD_COUNT, adjusted_timeout)) {
 
             case INPUT:
@@ -319,5 +321,7 @@ cleanup:
     ListFree(msg_q, free_wrapper);
     ListFree(outstanding_q, free_wrapper);
     printf("sender: closing sender\n");
+
+    return 0;
 }
 

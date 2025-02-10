@@ -1,8 +1,8 @@
 // Alexei Doell cka067 11345642
 #pragma once
-#include <netdb.h>
+#include <stdint.h>
 
-#define MAXLEN 5
+#define MAXLEN 100
 
 struct fake_packet {
     int32_t sequence_num;
@@ -10,4 +10,3 @@ struct fake_packet {
     char msg[MAXLEN];
 };
 
-void *get_in_addr(struct sockaddr *sa);

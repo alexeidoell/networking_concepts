@@ -46,20 +46,17 @@ $(LIB_DIR)liblist.a : $(OBJ_DIR)list_adders.o $(OBJ_DIR)list_movers.o \
 	$(OBJ_DIR)list_movers.o $(OBJ_DIR)list_removers.o \
 	$(OBJ_DIR)list_alloc.o
 
-$(OBJ_DIR)shared.o : shared.c shared.h | $(OBJ_DIR)
-	$(CC) -c $(CPPFLAGS) $(CFLAGS) shared.c -o $(OBJ_DIR)shared.o
-
 $(OBJ_DIR)receiver.o : receiver.c | $(OBJ_DIR)
 	$(CC) -c $(CPPFLAGS) $(CFLAGS) receiver.c -o $(OBJ_DIR)receiver.o
 
-$(BIN_DIR)receiver : $(OBJ_DIR)receiver.o $(OBJ_DIR)shared.o | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)receiver.o $(OBJ_DIR)shared.o -o $(BIN_DIR)receiver
+$(BIN_DIR)receiver : $(OBJ_DIR)receiver.o | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)receiver.o -o $(BIN_DIR)receiver
 
 $(OBJ_DIR)sender.o : sender.c | $(OBJ_DIR)
 	$(CC) -c $(CPPFLAGS) $(CFLAGS) sender.c -o $(OBJ_DIR)sender.o
 
-$(BIN_DIR)sender : $(OBJ_DIR)sender.o $(OBJ_DIR)shared.o $(LIB_DIR)liblist.a | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIB_DIRS) $(OBJ_DIR)sender.o $(OBJ_DIR)shared.o -llist -o $(BIN_DIR)sender
+$(BIN_DIR)sender : $(OBJ_DIR)sender.o $(LIB_DIR)liblist.a | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIB_DIRS) $(OBJ_DIR)sender.o -llist -o $(BIN_DIR)sender
 
 sender : $(BIN_DIR)sender
 	ln -sf $(BIN_DIR)sender sender
