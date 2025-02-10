@@ -1,9 +1,5 @@
 // Alexei Doell cka067 11345642
 
-#include <bits/time.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <shared.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,8 +7,23 @@
 #include <list.h>
 #include <time.h>
 
+#include <shared.h>
+
 #define POLL_FD_COUNT 2
-#define SENDING_WINDOW 3
+#define SENDING_WINDOW 5
+
+enum {
+    INPUT,
+    ACK,
+    TIMEOUT,
+    ERR
+};
+
+/* needed for my list library */
+int free_wrapper(void* msg) {
+    free(msg);
+    return 0;
+}
 
 int connect_to_receiver(char* hostname, char* port) {
     int sockfd;
@@ -53,17 +64,16 @@ int connect_to_receiver(char* hostname, char* port) {
         return -1;
     }
 
+    freeaddrinfo(servinfo);
+
 
     return sockfd;
 }
 
-int enqueue_packet(int packet_num, LIST* queue) {
+int enqueue_packet(int * packet_num, LIST * queue) {
     char * input = NULL;
     size_t len = 0;
     struct fake_packet * msg;
-    struct timespec timestamp;
-
-    clock_gettime(CLOCK_MONOTONIC, &timestamp);
 
     msg = malloc(sizeof(struct fake_packet));
     if (msg == NULL) {
@@ -72,39 +82,75 @@ int enqueue_packet(int packet_num, LIST* queue) {
         return -1;
     }
 
-    msg->sequence_num = packet_num;
+    msg->sequence_num = *packet_num;
     if (getline(&input, &len, stdin) == -1) {
         perror("sender: getline");
         fprintf(stderr, "sender: getline failed\n");
         free(input);
         return -1;
     }
+    if (strlen(input) > MAXLEN) {
+        fprintf(stderr, "sender: please input a msg less than %d characters long\n", MAXLEN);
+        free(input);
+        free(msg);
+        return 0;
+    }
 
     strcpy(msg->msg, input);
-    free(input);
+    if (input[0] == '\n') {
+        free(input);
+        free(msg);
+        return 1;
+    }
 
-    msg->timestamp = timestamp.tv_sec * 1000 + timestamp.tv_nsec / 1000;
-    ListAppend(queue, msg);
+
+    free(input);
+    ListPrepend(queue, msg);
+    ++(*packet_num);
     return 0;
 }
 
 
-
-int send_packet(int dest, LIST* list) {
-    struct fake_packet * msg = ListLast(list);
-
-    if (msg == NULL) {
-        fprintf(stderr, "sender: failed to get message from queue\n");
-        return -1;
-    }
-
+int send_packet(int dest, struct fake_packet* msg) {
+    struct timespec timestamp;
+    clock_gettime(CLOCK_MONOTONIC, &timestamp);
+    msg->timestamp = (long)timestamp.tv_sec * 1000 + timestamp.tv_nsec / 1000000;
 
     if (send(dest, msg, sizeof(struct fake_packet), 0) == -1) {
         perror("sender: send");
         fprintf(stderr, "sender: send failed\n");
         return -1;
     }
+    printf("sender: sent packet #%d\n", msg->sequence_num);
 
+
+    return 0;
+}
+
+int send_new_packet(int dest, LIST* msg_q, LIST* outstanding) {
+    struct fake_packet * msg = ListTrim(msg_q);
+
+    if (msg == NULL) {
+        fprintf(stderr, "sender: failed to get message from queue\n");
+        return -1;
+    }
+    send_packet(dest, msg);
+    ListPrepend(outstanding, msg);
+
+    return 0;
+}
+
+
+int resend_window(int dest, LIST* queue) {
+    struct fake_packet * msg = ListLast(queue);
+    if (msg == NULL) {
+        fprintf(stderr, "sender: failed to get message from queue\n");
+        return -1;
+    }
+    while (msg != NULL) {
+        send_packet(dest, msg);
+        msg = ListPrev(queue);
+    }
     return 0;
 }
 
@@ -119,17 +165,72 @@ int get_ack(int fd) {
     return ack.sequence_num;
 }
 
+int remove_ack_packets(int ack_num, LIST* queue) {
+    struct fake_packet * msg = ListLast(queue);
+    if (msg == NULL) {
+        fprintf(stderr, "sender: failed to get message from queue\n");
+        return -1;
+    }
+    while (msg != NULL && msg->sequence_num < ack_num) {
+        printf("sender: packet #%d now ACKed\n", msg->sequence_num);
+        free(msg);
+        ListRemove(queue);
+        msg = ListLast(queue);
+    }
+ 
+
+    return 0;
+}
+
+int update_timeout(long timeout, LIST* queue) {
+    struct timespec current_time;
+    long current_ms;
+
+    if (ListCount(queue) == 0) {
+        return -1;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &current_time);
+    current_ms = current_time.tv_nsec / 1000000 + (long)current_time.tv_sec * 1000;
+    return timeout - (current_ms - ((struct fake_packet*)ListLast(queue))->timestamp);
+}
+
+int poll_handler(struct pollfd* poll_fds, int fd_cnt, long timeout) {
+    int poll_rv;
+
+    poll_rv = poll(poll_fds, fd_cnt, timeout);
+    if (poll_rv == -1) {
+        printf("sender: poll failed\n");
+        return ERR;
+    } else if (poll_rv == 0) { // timeout
+        return TIMEOUT;
+    }
+
+    if ((poll_fds[0].revents & POLLIN) > 0) {
+        return INPUT;
+    }
+
+    if ((poll_fds[1].revents & POLLIN) > 0) {
+        return ACK;
+    }
+
+    if ((poll_fds[1].revents & POLLERR) > 0) {
+        printf("sender: receiving end is not open, please start the receiver and try again\n");
+        return ERR;
+    }
+
+    return 0;
+}
 
 int main(int argc, char *argv[])
 {
     int sockfd;
-    int poll_rv;
-    int timeout, adjusted_timeout;
+    long timeout, adjusted_timeout;
     int current_packet = 0;
-    int ack_num;
-    struct timespec current_time;
+    int ack_num, last_ack_num = -1;
+    int repeats = 0;
 
-    LIST* msg_q;
+    LIST* msg_q, * outstanding_q;
 
     struct pollfd poll_fds[POLL_FD_COUNT];
 
@@ -155,42 +256,67 @@ int main(int argc, char *argv[])
         fprintf(stderr, "sender: failed to allocate message queue, closing sender\n");
     }
 
+    outstanding_q = ListCreate();
+    if (outstanding_q == NULL) {
+        fprintf(stderr, "sender: failed to allocate message queue, closing sender\n");
+    }
+
     /* init poll fields */
     poll_fds[0].fd = 0;
     poll_fds[0].events = POLLIN;
     poll_fds[1].fd = sockfd;
     poll_fds[1].events = POLLIN;
 
-    printf("sender: please enter message contents\n");
+    printf("sender: please enter message contents then hit return key to send\n");
     while(1) { 
-        if (ListCount(msg_q) == 0) {
-            adjusted_timeout = -1;
-        } else {
-            clock_gettime(CLOCK_MONOTONIC, &current_time);
-            adjusted_timeout = timeout - ((current_time.tv_nsec / 1000 + current_time.tv_sec * 1000) - ((struct fake_packet*)ListLast(msg_q))->timestamp);
-        }
-        poll_rv = poll(poll_fds, POLL_FD_COUNT, adjusted_timeout);
+        adjusted_timeout = update_timeout(timeout, outstanding_q);
+        switch (poll_handler(poll_fds, POLL_FD_COUNT, adjusted_timeout)) {
 
-        if (poll_rv == -1) {
-            printf("sender: poll failed\n");
-            return -1;
-        } else if (poll_rv == 0) { // timeout
-            printf("sender: timeout on ACK\n");
-            printf("sender: resending window\n");
-            send_packet(sockfd, msg_q);
-        }
+            case INPUT:
+                if (enqueue_packet(&current_packet, msg_q) != 0) {
+                    goto cleanup;
+                };
+                while (ListCount(outstanding_q) < SENDING_WINDOW && ListCount(msg_q) > 0) {
+                    send_new_packet(sockfd, msg_q, outstanding_q);
+                }
+                break;
 
-        if ((poll_fds[0].revents & POLLIN) > 0) {
-            enqueue_packet(current_packet++, msg_q);
-            send_packet(sockfd, msg_q);
-        }
+            case ACK:
+                ack_num = get_ack(sockfd);
+                printf("sender: got ack for %d\n", ack_num);
+                if (ack_num == last_ack_num) {
+                    repeats += 1;
+                } else {
+                    repeats = 0;
+                }
+                last_ack_num = ack_num;
+                if (repeats >= 2) {
+                    printf("sender: received 3 repeated ACKs\n");
+                    printf("sender: resending window\n");
+                    resend_window(sockfd, outstanding_q);
+                    repeats = 0;
+                }
+                remove_ack_packets(ack_num, outstanding_q);
+                while (ListCount(outstanding_q) < SENDING_WINDOW && ListCount(msg_q) > 0) {
+                    send_new_packet(sockfd, msg_q, outstanding_q);
+                }
+                break;
 
-        if ((poll_fds[1].revents & POLLIN) > 0) {
-            ack_num = get_ack(sockfd);
-            printf("sender: got ack for %d\n", ack_num);
-            ListTrim(msg_q);
+            case TIMEOUT:
+                printf("sender: timeout on ACK\n");
+                printf("sender: resending window\n");
+                resend_window(sockfd, outstanding_q);
+                break;
+
+            case ERR:
+            default:
+                goto cleanup;
         }
-        
     }
+
+cleanup:
+    ListFree(msg_q, free_wrapper);
+    ListFree(outstanding_q, free_wrapper);
+    printf("sender: closing sender\n");
 }
 

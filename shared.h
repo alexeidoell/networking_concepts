@@ -1,8 +1,8 @@
 // Alexei Doell cka067 11345642
-
+#pragma once
 #include <netdb.h>
 
-#define MAXLEN 100
+#define MAXLEN 5
 
 struct fake_packet {
     int32_t sequence_num;

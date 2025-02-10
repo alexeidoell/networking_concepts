@@ -108,23 +108,27 @@ int main(int argc, char* argv[])
     while (1) {
         numbytes = recvfrom(sockfd, &msg, MAXLEN, 0,
                 (struct sockaddr*)&their_addr, &addr_len);
+
         if (numbytes == -1) {
             perror("recvfrom");
             printf("receiver: receive failed, exiting\n");
             close(sockfd);
             exit(1);
         }
+        printf("receiver: received packet #%d\n", msg.sequence_num);
+        if (msg.sequence_num != current_packet) {
+            printf("receiver: received out of order packet\n");
+            printf("receiver: expecting %d, got %d\n", current_packet, msg.sequence_num);
+            printf("receiver: if current message gets ACKed, %d will be requested\n", current_packet);
+        }
+
         ack_status = ack_check();
+
         if (ack_status == MSG_DROPPED) {
             printf("receiver: message being treated as not received, still expecting %d\n", 
                     current_packet);
         } else {
-
-            if (msg.sequence_num != current_packet) {
-                printf("receiver: received out of order packet\n");
-                printf("receiver: expecting %d, got %d\n", current_packet, msg.sequence_num);
-                printf("receiver: if current message was ACKed, %d will be requested\n", current_packet);
-            } else {
+            if (msg.sequence_num == current_packet) {
                 current_packet += 1;
             }
             if (ack_status == ACK) {
