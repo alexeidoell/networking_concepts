@@ -70,10 +70,12 @@ int connect_to_receiver(char* hostname, char* port) {
     return sockfd;
 }
 
-int enqueue_packet(int * packet_num, LIST * queue) {
+int enqueue_packet(LIST * queue) {
     char * input = NULL;
     size_t len = 0;
     struct fake_packet * msg;
+
+    static int packet_num = 0;
 
     msg = malloc(sizeof(struct fake_packet));
     if (msg == NULL) {
@@ -82,7 +84,7 @@ int enqueue_packet(int * packet_num, LIST * queue) {
         return -1;
     }
 
-    msg->sequence_num = *packet_num;
+    msg->sequence_num = packet_num;
     if (getline(&input, &len, stdin) == -1) {
         perror("sender: getline");
         fprintf(stderr, "sender: getline failed\n");
@@ -106,7 +108,7 @@ int enqueue_packet(int * packet_num, LIST * queue) {
 
     free(input);
     ListPrepend(queue, msg);
-    ++(*packet_num);
+    packet_num += 1;
     return 0;
 }
 
@@ -226,7 +228,6 @@ int main(int argc, char *argv[])
 {
     int sockfd;
     long timeout, adjusted_timeout;
-    int current_packet = 0;
     int ack_num, last_ack_num = -1;
     int repeats = 0;
 
@@ -273,7 +274,7 @@ int main(int argc, char *argv[])
         switch (poll_handler(poll_fds, POLL_FD_COUNT, adjusted_timeout)) {
 
             case INPUT:
-                if (enqueue_packet(&current_packet, msg_q) != 0) {
+                if (enqueue_packet(msg_q) != 0) {
                     goto cleanup;
                 };
                 while (ListCount(outstanding_q) < SENDING_WINDOW && ListCount(msg_q) > 0) {
