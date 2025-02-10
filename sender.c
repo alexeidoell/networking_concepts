@@ -32,7 +32,7 @@ int connect_to_receiver(char* hostname, char* port) {
     int rv;
 
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET6;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
 
     if ((rv = getaddrinfo(hostname, port, &hints, &servinfo)) != 0) {
@@ -105,10 +105,10 @@ int enqueue_packet(LIST * queue) {
         return 1;
     }
 
-
     free(input);
     ListPrepend(queue, msg);
     packet_num += 1;
+    printf("sender: packet #%d added to sending queue\n", msg->sequence_num);
     return 0;
 }
 
@@ -231,7 +231,8 @@ int main(int argc, char *argv[])
     int ack_num, last_ack_num = -1;
     int repeats = 0;
 
-    LIST* msg_q, * outstanding_q;
+    LIST* msg_q;
+    LIST* outstanding_q;
 
     struct pollfd poll_fds[POLL_FD_COUNT];
 
@@ -295,11 +296,17 @@ int main(int argc, char *argv[])
                 last_ack_num = ack_num;
                 if (repeats >= 2) {
                     printf("sender: received 3 repeated ACKs\n");
-                    printf("sender: resending window\n");
-                    resend_window(sockfd, outstanding_q);
+                    if (ListCount(outstanding_q) > 0) {
+                        printf("sender: resending window\n");
+                        resend_window(sockfd, outstanding_q);
+                    } else {
+                        printf("sender: no need to resend, no outstanding messages\n");
+                    }
                     repeats = 0;
                 }
-                remove_ack_packets(ack_num, outstanding_q);
+                if (ListCount(outstanding_q) > 0) {
+                    remove_ack_packets(ack_num, outstanding_q);
+                }
                 while (ListCount(outstanding_q) < SENDING_WINDOW && ListCount(msg_q) > 0) {
                     send_new_packet(sockfd, msg_q, outstanding_q);
                 }
