@@ -93,6 +93,7 @@ void ListFree(LIST *list, int (*itemFree)(void *)) {
             destroyNode(curr_node->prev);
             curr_node = getNodeFromTable(next_node);
         }
+        itemFree(curr_node->item);
         destroyNode(curr_node->table_entry->index);
     }
     destroyList((unsigned long)list);
