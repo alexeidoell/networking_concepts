@@ -1,23 +1,416 @@
 Alexei Doell cka067 11345642
 
+Problem Statement ==============================================================
 
-Go Back N Implementation Plan:
+I need to create a simulation of a go back N sliding window protocol using UDP 
+sockets. For this, we will have a sender program that sends "packets" that are
+assigned a sequence number to a receiver program. This receiver program then
+decides whether to treat it as if it was never received, treat it as received
+but the ACK was dropped, or to treat it as if the ACK was properly sent back to
+the sender program.
+
+
+Go Back N Implementation Plan ==================================================
 
 For my implementation, I will be using poll on the sender side to wait for three
 different events:
 
- - ACK timeout
  - an ACK from the receiver
+ - ACK timeout
  - input is ready to grab from stdin
 
 Each poll call in the main poll loop will have a timeout t that is given by
 t = T - ((current time) - (time when oldest message in window was sent)) where
 T is the timeout window given by the user.
- 
-We essentially send all the messages in the window at once so we do not need 
-any finer granularity of timing (confirmed by Derek).
+
+ACK Received:
 
 When we do actually receive an ACK from the receiver, we can take the sequence
 number in that ACK and use it as a cumulative ACK. This means that all of the 
-packets with a sequence number less than the number given in the 
-ACK can be removed from the message queue.
+packets with a sequence number less than the number given in the ACK can be 
+removed from the message queue. For example, if an ACK is dropped, the sender
+will happily accept the next packet in the sequence and can send an ACK back for
+that one. In this case, the sender should realize that both packets were received
+properly and consider them both acknowledged even though only one ACK was received.
+
+After we receive an ACK, the timeout is updated with the new value as calculated
+using the new oldest message in the window and poll is called again with a new
+timeout value.
+
+ACK Timeout:
+
+When poll times out, that means we have not received an ACK for the oldest
+message in the queue within the timeout window. This means we just can
+resend all the messages in the outstanding msg queue, where we also update
+the timestamps on all messages.
+
+Whenever poll is called, this timeout period must be recalculated. This is because
+if poll returns due to stdin, rather than an ACK being received, then if we did
+not recalculate the timeout period, the next poll call will wait the same max
+amount of time, rather than accounting for the time that passed in between the
+two calls to poll. This is done using the update_timeout() function in the sender
+helper functions section.
+
+Special Rule:
+
+If the sender received 3 identical acknowledged numbers in a row, we are to treat
+that as if a timeout occurred and resend the entire sending window essentially to
+bypass the time spent waiting for a timeout because in this situation, it is
+basically guaranteed that a timeout would eventually happen.
+
+STDIN Ready:
+
+When a newline is entered, poll will return and signify that stdin has
+something ready to be read. We can grab the message and then recall poll
+after recalculating the timeout to account for the time spent getting
+the new message.
+
+To simulate ordered "packets", I use a fake_packet and timed_packet struct:
+
+struct fake_packet {
+    int32_t sequence_num,
+    char msg[MAX_LEN] <- MAX_LEN defined as 100
+}
+
+struct timed_packet {
+    struct fake_packet packet,
+    long timestamp
+}
+
+The timed_packet struct contains:
+
+ - A sequence number, which uses an int32_t, so that I can convert it with htonl and
+   ntohl for portability. Derek confirmed that we do not need to worry about
+   wraparound, and that using a 32 bit integer was fine, as that gives a range
+   of around 2 billion which should not be reached in this small simulation program
+ - A timestamp, in milliseconds, given by clock_gettime for updating the timeout
+   in my poll calls later. This does not need to be 32 bits specifically, as this
+   value will only ever be read by the sender, so the endianness will not matter.
+   Longs are used by the struct timespec type, so that is what I went for.
+ - A message buffer that is MAX_LEN characters long. Derek told us that we can 
+   assume that the contents of each message can fit into a single UDP frame, so
+   I don't see a need for variable length messages. As such, I just chose 100
+   as it's easy.
+
+The first two of these fields are put into a separate struct called a fake_packet
+because the receiver never needs to look at the timestamp so there is no point
+in sending it over.
+
+List Library ===================================================================
+
+In order to make a queue to keep track of my sending window, I used my list library
+that I made in CMPT332 as encouraged by Derek.
+
+Necessary functions in my list API:
+
+ListCreate() - creates a new list
+
+ListPrepend() - adds an item to the head of the list, and make that item
+the new head
+
+ListPrev() - set the cursor of the list to the previous item, and return a pointer
+to that item
+
+ListTrim() - remove the item at the tail of the list, and return a pointer to that
+item
+
+ListLast() - set the cursor of the list to the tail, and return a pointer to that
+item
+
+ListRemove() - remove the item at the cursor of the list, and return a pointer
+to that item
+
+ListCount() - return the number of items in the list
+
+ListFree() - free all the items in the list, then free the memory allocated for
+the list (requires a function that returns an int and frees a void* as one
+of its parameters, so there is a wrapper function around free() in the sender
+program called free_wrapper())
+
+
+Receiver =======================================================================
+
+Helper functions:
+
+int ack_check(void):
+    input = getline()
+    print("was the message received?")
+    if (input[0] != 'Y'):
+        return MSG_DROPPED
+
+    print("was the ack sent?")
+    input = getline()
+    if (input[0] != 'Y'):
+        return ACK_DROPPED
+
+    return ACK
+
+ack_check will get input from the user twice, first to confirm if they would
+like to treat the message as having been properly received, then again to
+confirm if they would like to treat the receiver's ACK as having been properly
+sent back to the sender. Depending on the user's input, the function will return
+one of three enum values that represent the different outcomes: ACK, ACK_DROPPED,
+MSG_DROPPED.
+
+int bind_to(char* port):
+
+    getaddrinfo(port, addrinfo, ...)
+
+    sockfd = socket(addrinfo)
+
+    bind(sockfd)
+
+    return sockfd
+
+bind_to is just a wrapper around the UDP socket boilerplate function calls, all
+it does it attempt to bind to a passive socket and check for any errors, before
+returning the file descriptor for the socket.
+
+Main function:
+
+    sockfd = bind_to(argv[1])
+
+    while(1):
+        recvfrom(sockfd, msg)
+
+        print("got packet number " + msg.sequence_num)
+        if (msg.sequence_num != current_packet):
+            print("received out of order packet")
+
+        ack_status = ack_check()
+
+        if ack_status == MSG_DROPPED:
+            print("msg dropped, current packet unchanged")
+        else:
+            if msg.sequence_num == current_packet:
+                // got correct packet so now expect the next one
+                current_packet += 1
+            if ack_status == ACK:
+                sendto(sockfd, ACK) // send ack back with current_packet
+                print("now expecting " + current_packet)
+            else:
+                print("expecting " + current_packet + " but ACK not sent")
+
+The main function of the receiver first binds to a socket then loops indefinitely
+receiving a new message from the sender. Once a message is received, the user
+is prompted to choose whether the message was dropped, received and the ACK
+was dropped, or the message was received and the ACK was properly sent back to
+the sender as described in the ack_check() function.
+
+If the message was received properly, the receiver now expects the next packet,
+and will send the newly expected sequence number back to the sender if the user
+opts to.
+
+Recvfrom essentially holds its own queue, as long as a full message is read, no
+data will be lost (ignoring actual network loss), so after the ACK choice is
+handled, the receiver just calls recvfrom once again and either get the next
+fake_packet, or wait for the next one.
+
+I kept most of the print statements in here, because a lot of the logic is just
+to not do anything in certain situations, so the pseudocode would get kinda hard
+to read without them.
+
+Sender =========================================================================
+
+Helper functions:
+
+
+int free_wrapper(void* msg):
+    free(msg)
+    return 0
+
+free_wrapper is just a simple way to let my list library call free on the messages
+that are allocated, as it requires a (int(*)(void*)) function as one of its 
+parameters that frees individual items in the list.
+
+int connect_to_receiver(char* hostname, char* port):
+
+    getaddrinfo(port, addrinfo, ...)
+
+    sockfd = socket(addrinfo)
+
+    connect(sockfd)
+
+    return sockfd
+
+connect_to_receiver is a wrapper around the boilerplate UDP calls that connect
+to a socket. Even though I am using UDP, the sender will only ever send to and
+receive from one socket, that being the receiver. This means I can just connect
+to the socket and make my later calls to send and recv shorter. Similar to the
+receiver's bind_to(), this function will check for any errors and then return
+the finished file descriptor for the socket that has been connected to.
+
+int enqueue_packet(LIST * queue):
+    
+    static sequence_num = 0
+
+    msg = malloc(sizeof timed_packet)
+
+    msg.msg = getline()
+    msg.sequence_num = sequence_num
+    
+    ListPrepend(queue, msg)
+    sequence_num += 1
+
+enqueue_packet is called whenever poll returns due to there being input on stdin.
+It gets a line of input from the user, and uses that as the contents of the buffer
+inside of a fake_packet. Then this gets added to the queue passed as a parameter.
+For enqueue_packet, this is always the queue of messages that have not been sent
+yet.
+
+int send_packet(int dest, struct timed_packet* msg):
+    
+    msg.timestamp = clock_gettime()
+
+    send(dest, msg)
+
+send_packet will take a message, update its timestamp, then send it to its destination.
+Every time a timed_packet is sent, its timestamp needs to be updated, and this function
+lets me easily do that whether its a resend or a new send as outlined in the next
+two functions.
+
+
+int send_new_packet(int dest, LIST* msg_q, LIST* outstanding):
+    msg = ListTrim(msg_q)
+
+    send_packet(dest, msg)
+
+    ListPrepend(outstanding, msg)
+
+send_new_packet takes two message queues, one that contains messages that have
+not been sent yet (the one that is added to by enqueue_packet), and one that contains
+the messages that have already been sent. It will take the message at the front of
+the first queue, send it, then add it to the back of the outstanding message queue.
+By keeping the two queues distinct, it makes resending the window much easier.
+
+int resend_window(int dest, LIST* queue):
+
+    msg = ListLast(queue)
+
+    while (msg != NULL):
+        send_packet(dest, msg)
+        msg = ListPrev(queue)
+
+resend_window takes the queue of outstanding messages, and resends each of them
+by iterating over the outstanding message queue. All messages that are in this
+outstanding queue are already within the current sliding window, and have been
+sent already but are waiting for an ACK. This will get called on a timeout, or
+the *special rule*.
+
+int get_ack(int fd):
+    recv(fd, ack)
+
+    return ack.sequence_num
+
+This just receives an ACK packet from the receiver and returns the number that
+was acknowledged.
+
+int remove_ack_packets(int ack_num, LIST* queue):
+   msg = ListLast(queue)
+
+   while (msg != NULL && msg.sequence_num < ack_num):
+        free(msg)
+        ListRemove(msg)
+        msg = ListLast(queue)
+
+remove_ack_packets takes an ack_num, which would have been received through get_ack,
+and removes all the packets inside the outstanding message queue that have a
+sequence number less than the the number received in the ACK. This is how messages
+will be considered acknowledged, and contains the cumulative ACK logic.
+
+int update_timeout(long timeout, LIST* queue):
+
+    current_time = clock_gettime()
+    // assuming clock_gettime() gives milliseconds for sake of pseudocode
+
+    return timeout - (current_time - ListLast(queue).timestamp)
+
+update_timeout takes the timeout as given in the parameters for the sender, and
+recalculates the proper timeout for poll based on the time that has elapsed since
+the oldest message within the queue was sent. 
+
+
+int poll_handler(struct pollfd* poll_fds, int fd_cnt, long timeout):
+
+    rv = poll(poll_fds, fd_cnt, timeout)
+
+    if rv == -1:
+        return ERR
+    else if rv == 0:
+        return TIMEOUT
+    
+    if (poll_fds[0].revents & POLLIN) > 0:
+        return INPUT
+
+    if (poll_fds[1].revents & POLLIN) > 0:
+        return ACK
+
+    if (poll_fds[1].revents & POLLERR) > 0:
+        // this means the receiver is not open, and if we don't do this, poll freaks out
+        // and will continuously instantly return without waiting for a timeout
+        return ERR
+
+poll_handler will just call poll and handle its outcomes as described at the top
+of this document. For making my main function easier to read, I made an enum
+that is returned by this function and then can easily be used as part of a switch
+statement later.
+
+Main function:
+    sockfd = connect_to_receiver(argv[2], argv[3])
+
+    timeout = atoi(argv[1])
+
+    msg_q = ListCreate()
+    outstanding_q = ListCreate()
+
+    /* init poll fields to listen for POLLIN (input ready to read) */
+    struct pollfd poll_fds[2]
+    poll_fds[0].fd = 0
+    poll_fds[0].events = POLLIN
+    poll_fds[1].fd = sockfd
+    poll_fds[1].events = POLLIN
+
+    while(1):
+        adjusted_timeout = update_timeout(timeout, outstanding_q)
+
+        switch (poll_handler(poll_fds, 2, adjusted_timeout)) {
+
+        case INPUT:
+            if enqueue_packet(msg_q) != 0:
+                goto cleanup
+            if ListCount(outstanding_q) < SENDING_WINDOW_SIZE:
+                send_new_packet(sockfd, msg_q, outstanding_q)
+        
+        case ACK:
+            ack_num = get_ack(sockfd)
+
+            if (ack_num == last_ack_num):
+                repeats += 1
+            if (repeats >= 2): // 2 repeats means 3 duplicates in total
+                resend_window(sockfd, outstanding_q)
+                repeats = 0
+
+            remove_ack_packets(ack_num, outstanding_q)
+
+            while (ListCount(outstanding_q) < SENDING_WINDOW_SIZE):
+                send_new_packet(sockfd, msg_q, outstanding_q)
+
+        case TIMEOUT:
+            resend_window(sockfd, outstanding_q)
+
+        case ERR:
+            goto cleanup
+
+        default:
+            ** unreachable **
+
+        }
+
+    cleanup:
+        ListFree(msg_q)
+        ListFree(outstanding_q)
+        close(sockfd)
+        return 0
+
+
+            
