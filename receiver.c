@@ -126,6 +126,7 @@ int main(int argc, char* argv[])
             printf("receiver: expecting %d, got %d\n", current_packet, msg.sequence_num);
             printf("receiver: if current message gets ACKed, %d will be requested\n", current_packet);
         }
+        printf("receiver: message contents: %s", msg.msg);
 
         ack_status = ack_check();
 
@@ -133,7 +134,6 @@ int main(int argc, char* argv[])
             printf("receiver: message being treated as not received, still expecting %d\n", 
                     current_packet);
         } else {
-            printf("receiver: message contents: %s", msg.msg);
             if (msg.sequence_num == current_packet) {
                 current_packet += 1;
             }
@@ -145,10 +145,9 @@ int main(int argc, char* argv[])
                     printf("receiver: sendto failed, exiting\n");
                     close(sockfd);
                     exit(1);
-                } else {
-                    printf("receiver: sent ACK to sender\n");
-                    printf("receiver: now expecting %d\n", current_packet);
                 }
+                printf("receiver: sent ACK to sender\n");
+                printf("receiver: now expecting %d\n", current_packet);
             } else {
                 printf("receiver: message being treated as received, now expecting %d however ACK will not be sent\n",
                         current_packet);
