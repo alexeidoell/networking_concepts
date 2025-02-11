@@ -8,8 +8,6 @@
 
 #include <shared.h>
 
-
-
 enum {
     ACK,
     ACK_DROPPED,
@@ -25,7 +23,7 @@ int ack_check(void) {
     if (input[0] != 'Y') {
         rv = MSG_DROPPED;
     } else {
-        printf("receiver: was the ACK successfully sent back (Y/N)\n");
+        printf("receiver: was the ACK successfully sent back? (Y/N)\n");
         getline(&input, &len, stdin);
         if (input[0] != 'Y') {
             rv = ACK_DROPPED;
@@ -89,6 +87,7 @@ int main(int argc, char* argv[])
     struct fake_packet msg;
     int sockfd;
     int ack_status;
+    int ack_packet;
 
     int current_packet = 0;
 
@@ -112,12 +111,15 @@ int main(int argc, char* argv[])
         numbytes = recvfrom(sockfd, &msg, MAXLEN, 0,
                 (struct sockaddr*)&their_addr, &addr_len);
 
+
         if (numbytes == -1) {
             perror("recvfrom");
             printf("receiver: receive failed, exiting\n");
             close(sockfd);
             exit(1);
         }
+
+        msg.sequence_num = ntohl(msg.sequence_num);
         printf("receiver: received packet #%d\n", msg.sequence_num);
         if (msg.sequence_num != current_packet) {
             printf("receiver: received out of order packet\n");
@@ -131,12 +133,13 @@ int main(int argc, char* argv[])
             printf("receiver: message being treated as not received, still expecting %d\n", 
                     current_packet);
         } else {
+            printf("receiver: message contents: %s", msg.msg);
             if (msg.sequence_num == current_packet) {
                 current_packet += 1;
             }
             if (ack_status == ACK) {
-                msg.sequence_num = current_packet;
-                if (sendto(sockfd, &msg, numbytes, 0,
+                ack_packet = htonl(current_packet);
+                if (sendto(sockfd, &ack_packet, numbytes, 0,
                             (struct sockaddr*)&their_addr, addr_len) == -1) {
                     perror("send");
                     printf("receiver: sendto failed, exiting\n");

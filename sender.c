@@ -4,20 +4,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <poll.h>
-#include <list.h>
 #include <time.h>
 #include <netdb.h>
+#include <unistd.h>
 
+#include <list.h>
 #include <shared.h>
 
 #define POLL_FD_COUNT 2
-#define SENDING_WINDOW 5
 
 enum {
     INPUT,
     ACK,
     TIMEOUT,
     ERR
+};
+
+struct timed_packet {
+    struct fake_packet packet;
+    long timestamp;
 };
 
 /* needed for my list library */
@@ -73,18 +78,18 @@ int connect_to_receiver(char* hostname, char* port) {
 int enqueue_packet(LIST * queue) {
     char * input = NULL;
     size_t len = 0;
-    struct fake_packet * msg;
+    struct timed_packet * msg;
 
     static int packet_num = 0;
 
-    msg = malloc(sizeof(struct fake_packet));
+    msg = malloc(sizeof(struct timed_packet));
     if (msg == NULL) {
         perror("sender: malloc");
         fprintf(stderr, "sender: failed to allocate message\n");
         return -1;
     }
 
-    msg->sequence_num = packet_num;
+    msg->packet.sequence_num = packet_num;
     if (getline(&input, &len, stdin) == -1) {
         perror("sender: getline");
         fprintf(stderr, "sender: getline failed\n");
@@ -98,7 +103,7 @@ int enqueue_packet(LIST * queue) {
         return 0;
     }
 
-    strcpy(msg->msg, input);
+    strcpy(msg->packet.msg, input);
     if (input[0] == '\n') {
         free(input);
         free(msg);
@@ -108,29 +113,32 @@ int enqueue_packet(LIST * queue) {
     free(input);
     ListPrepend(queue, msg);
     packet_num += 1;
-    printf("sender: packet #%d added to sending queue\n", msg->sequence_num);
+    printf("sender: packet #%d added to sending queue\n", msg->packet.sequence_num);
     return 0;
 }
 
 
-int send_packet(int dest, struct fake_packet* msg) {
+int send_packet(int dest, struct timed_packet* msg) {
     struct timespec timestamp;
     clock_gettime(CLOCK_MONOTONIC, &timestamp);
     msg->timestamp = (long)timestamp.tv_sec * 1000 + timestamp.tv_nsec / 1000000;
 
-    if (send(dest, msg, sizeof(struct fake_packet), 0) == -1) {
+    msg->packet.sequence_num = htonl(msg->packet.sequence_num);
+
+    if (send(dest, &msg->packet, sizeof(struct fake_packet), 0) == -1) {
         perror("sender: send");
         fprintf(stderr, "sender: send failed\n");
         return -1;
     }
-    printf("sender: sent packet #%d\n", msg->sequence_num);
+    msg->packet.sequence_num = ntohl(msg->packet.sequence_num);
+    printf("sender: sent packet #%d\n", msg->packet.sequence_num);
 
 
     return 0;
 }
 
 int send_new_packet(int dest, LIST* msg_q, LIST* outstanding) {
-    struct fake_packet * msg = ListTrim(msg_q);
+    struct timed_packet * msg = ListTrim(msg_q);
 
     if (msg == NULL) {
         fprintf(stderr, "sender: failed to get message from queue\n");
@@ -144,7 +152,7 @@ int send_new_packet(int dest, LIST* msg_q, LIST* outstanding) {
 
 
 int resend_window(int dest, LIST* queue) {
-    struct fake_packet * msg = ListLast(queue);
+    struct timed_packet * msg = ListLast(queue);
     if (msg == NULL) {
         fprintf(stderr, "sender: failed to get message from queue\n");
         return -1;
@@ -157,24 +165,24 @@ int resend_window(int dest, LIST* queue) {
 }
 
 int get_ack(int fd) {
-    struct fake_packet ack;
+    long ack;
     if (recv(fd, &ack, sizeof ack, 0) == -1) {
         perror("sender: recv:");
         fprintf(stderr, "sender: failed to recv ack\n");
         return -1;
     }
 
-    return ack.sequence_num;
+    return ntohl(ack);
 }
 
 int remove_ack_packets(int ack_num, LIST* queue) {
-    struct fake_packet * msg = ListLast(queue);
+    struct timed_packet * msg = ListLast(queue);
     if (msg == NULL) {
         fprintf(stderr, "sender: failed to get message from queue\n");
         return -1;
     }
-    while (msg != NULL && msg->sequence_num < ack_num) {
-        printf("sender: packet #%d now ACKed\n", msg->sequence_num);
+    while (msg != NULL && msg->packet.sequence_num < ack_num) {
+        printf("sender: packet #%d now ACKed\n", msg->packet.sequence_num);
         free(msg);
         ListRemove(queue);
         msg = ListLast(queue);
@@ -194,7 +202,7 @@ int update_timeout(long timeout, LIST* queue) {
 
     clock_gettime(CLOCK_MONOTONIC, &current_time);
     current_ms = current_time.tv_nsec / 1000000 + (long)current_time.tv_sec * 1000;
-    return timeout - (current_ms - ((struct fake_packet*)ListLast(queue))->timestamp);
+    return timeout - (current_ms - ((struct timed_packet*)ListLast(queue))->timestamp);
 }
 
 int poll_handler(struct pollfd* poll_fds, int fd_cnt, long timeout) {
@@ -228,6 +236,7 @@ int main(int argc, char *argv[])
 {
     int sockfd;
     long timeout, adjusted_timeout;
+    int sending_window;
     int ack_num, last_ack_num = -1;
     int repeats = 0;
 
@@ -236,12 +245,12 @@ int main(int argc, char *argv[])
 
     struct pollfd poll_fds[POLL_FD_COUNT];
 
-    if (argc != 4) {
-        fprintf(stderr,"usage: sender <timeout> <hostname> <server_port>\n");
+    if (argc != 5) {
+        fprintf(stderr,"usage: sender <timeout> <sending_window> <hostname> <server_port>\n");
         exit(1);
     }
 
-    sockfd = connect_to_receiver(argv[2], argv[3]);
+    sockfd = connect_to_receiver(argv[3], argv[4]);
 
     if (sockfd == -1) {
         fprintf(stderr, "sender: failed to connect, closing sender\n");
@@ -251,6 +260,11 @@ int main(int argc, char *argv[])
     timeout = atoi(argv[1]) * 1000;
     if (timeout == 0) {
         fprintf(stderr, "sender: please give a valid timeout period in seconds, closing sender\n");
+    }
+
+    sending_window = atoi(argv[2]);
+    if (timeout == 0) {
+        fprintf(stderr, "sender: please give a valid sending window size, closing sender\n");
     }
 
     msg_q = ListCreate();
@@ -280,7 +294,7 @@ int main(int argc, char *argv[])
                 if (enqueue_packet(msg_q) != 0) {
                     goto cleanup;
                 };
-                while (ListCount(outstanding_q) < SENDING_WINDOW && ListCount(msg_q) > 0) {
+                while (ListCount(outstanding_q) < sending_window && ListCount(msg_q) > 0) {
                     send_new_packet(sockfd, msg_q, outstanding_q);
                 }
                 break;
@@ -307,7 +321,7 @@ int main(int argc, char *argv[])
                 if (ListCount(outstanding_q) > 0) {
                     remove_ack_packets(ack_num, outstanding_q);
                 }
-                while (ListCount(outstanding_q) < SENDING_WINDOW && ListCount(msg_q) > 0) {
+                while (ListCount(outstanding_q) < sending_window && ListCount(msg_q) > 0) {
                     send_new_packet(sockfd, msg_q, outstanding_q);
                 }
                 break;
@@ -319,14 +333,19 @@ int main(int argc, char *argv[])
                 break;
 
             case ERR:
-            default:
                 goto cleanup;
+            default:
+                /* this will never happen because poll_handler() only ever
+                 * returns one of the values in the enum so I can let gcc
+                 * do some optimizations by letting it know its unreachable */
+                __builtin_unreachable();
         }
     }
 
 cleanup:
     ListFree(msg_q, free_wrapper);
     ListFree(outstanding_q, free_wrapper);
+    close(sockfd);
     printf("sender: closing sender\n");
 
     return 0;

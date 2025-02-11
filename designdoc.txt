@@ -9,7 +9,6 @@ decides whether to treat it as if it was never received, treat it as received
 but the ACK was dropped, or to treat it as if the ACK was properly sent back to
 the sender program.
 
-
 Go Back N Implementation Plan ==================================================
 
 For my implementation, I will be using poll on the sender side to wait for three
@@ -21,7 +20,11 @@ different events:
 
 Each poll call in the main poll loop will have a timeout t that is given by
 t = T - ((current time) - (time when oldest message in window was sent)) where
-T is the timeout window given by the user.
+T is the timeout window given by the user. In the case in which there are no
+outstanding messages in the sending window, I use -1 as my timeout value which
+means poll will not timeout and will wait until there is something ready to be
+read either on stdin or from the receiver. There is no point in timing out and
+trying to resend when there is nothing to resend.
 
 ACK Received:
 
@@ -65,6 +68,16 @@ something ready to be read. We can grab the message and then recall poll
 after recalculating the timeout to account for the time spent getting
 the new message.
 
+Shared =========================================================================
+
+This section contains what is included in the shared.h header.
+
+Included headers:
+
+stdint.h - for fixed size integers
+
+Structs:
+
 To simulate ordered "packets", I use a fake_packet and timed_packet struct:
 
 struct fake_packet {
@@ -90,7 +103,9 @@ The timed_packet struct contains:
  - A message buffer that is MAX_LEN characters long. Derek told us that we can 
    assume that the contents of each message can fit into a single UDP frame, so
    I don't see a need for variable length messages. As such, I just chose 100
-   as it's easy.
+   as it's easy, if I really wanted to maximize the usage of the full UDP frame,
+   I think I would want to use around 500 bytes(?) but the point of the assignment
+   is go back N, not variable length messaging.
 
 The first two of these fields are put into a separate struct called a fake_packet
 because the receiver never needs to look at the timestamp so there is no point
@@ -127,8 +142,17 @@ the list (requires a function that returns an int and frees a void* as one
 of its parameters, so there is a wrapper function around free() in the sender
 program called free_wrapper())
 
-
 Receiver =======================================================================
+
+Included headers:
+
+stdio.h - getline() and other IO library calls
+stdlib.h - for free()
+string.h - for memset()
+netdb.h - for the UNIX socket library calls
+unistd.h - for close()
+
+shared.h - for my struct definitions
 
 Helper functions:
 
@@ -144,6 +168,12 @@ int ack_check(void):
         return ACK_DROPPED
 
     return ACK
+
+enum { // enum representing the values returned by ack_check
+    ACK,
+    ACK_DROPPED,
+    MSG_DROPPED
+}
 
 ack_check will get input from the user twice, first to confirm if they would
 like to treat the message as having been properly received, then again to
@@ -210,7 +240,24 @@ I kept most of the print statements in here, because a lot of the logic is just
 to not do anything in certain situations, so the pseudocode would get kinda hard
 to read without them.
 
+This loop never ends, so there is no need to close/free anything except on errors,
+which I do within the actual implementation. I am treating the receiver like a server
+so if it needs to be closed it can be interrupted with ctrl+C.
+
 Sender =========================================================================
+
+Included headers:
+
+stdio.h - getline() and other IO library calls
+stdlib.h - for free()
+string.h - for memset()
+poll.h - for poll()
+time.h - for clock_gettime() and its related structs
+netdb.h - for the UNIX socket library calls
+unistd.h - for close()
+
+shared.h - for my struct definitions
+list.h - for my list library
 
 Helper functions:
 
@@ -246,7 +293,12 @@ int enqueue_packet(LIST * queue):
 
     msg = malloc(sizeof timed_packet)
 
-    msg.msg = getline()
+    msg.packet.msg = getline()
+    
+    if (msg.packet.msg[0] == '\n'):
+        // close the sender
+        return -1
+
     msg.sequence_num = sequence_num
     
     ListPrepend(queue, msg)
@@ -320,6 +372,9 @@ will be considered acknowledged, and contains the cumulative ACK logic.
 
 int update_timeout(long timeout, LIST* queue):
 
+    if ListCount(queue) == 0:
+        return -1 // infinite timeout
+
     current_time = clock_gettime()
     // assuming clock_gettime() gives milliseconds for sake of pseudocode
 
@@ -328,7 +383,6 @@ int update_timeout(long timeout, LIST* queue):
 update_timeout takes the timeout as given in the parameters for the sender, and
 recalculates the proper timeout for poll based on the time that has elapsed since
 the oldest message within the queue was sent. 
-
 
 int poll_handler(struct pollfd* poll_fds, int fd_cnt, long timeout):
 
@@ -349,6 +403,13 @@ int poll_handler(struct pollfd* poll_fds, int fd_cnt, long timeout):
         // this means the receiver is not open, and if we don't do this, poll freaks out
         // and will continuously instantly return without waiting for a timeout
         return ERR
+
+enum { // enum representing the values returned by poll_handler
+    INPUT,
+    TIMEOUT,
+    ACK,
+    ERR
+}
 
 poll_handler will just call poll and handle its outcomes as described at the top
 of this document. For making my main function easier to read, I made an enum
@@ -413,4 +474,81 @@ Main function:
         return 0
 
 
-            
+The main function does the networking setup with connect_to_receiver, sets up the
+timeout value as given in the CLI arguments, initializes both message queues then
+fills the pollfd structs with the events that the sender wants to be notified for.
+
+Within the main loop, it first updates the timeout value. This needs to be done
+before every call to poll to maintain accurate timeout values as explained above.
+When poll returns, the poll_handler will then convert the result into the enum
+that represents the outcomes of poll. The sender will use this enum as labels in
+a switch statement to determine what to do on this iteration of its main loop.
+
+INPUT:
+    
+If poll notifies the sender of something being ready to read from stdin, it will
+call enqueue_packet and try to add a packet to the msg_q. If enqueue_packet returns
+-1 that means there was either an error or the user inputed just a newline, so the
+sender will exit the main loop and go to the cleanup label akin to how we were 
+instructed to exit in assignment #1.
+
+Otherwise, after enqueue_packet, the sender will call send_new_packet if there is
+room in the sending window.
+
+ACK:
+
+If poll notifies the sender of an ACK being ready to be received, the sender will
+call get_ack and then check for repeats. This is to handle the special rule of three
+repeated duplicate acknowledgements. If it detects this, it will call resend_window.
+
+Otherwise, it will get the ACK value and call remove_ack_packets. If there is now
+room in the outstanding_q, it will call send_new_packet until the sending window
+is full again or there are no more packets in the msg_q waiting to be sent.
+
+TIMEOUT:
+
+In the case of a timeout, the sender will always just call resend_window, and
+that is it. There isn't anything else that needs to actually be done.
+
+ERR:
+
+In the case of an error, this means that within poll_handler, either poll itself
+failed, or when the sender tried to send to the receiver, the file descriptor for
+the socket was set to POLLERR. In both of these cases, I just go to my cleanup label
+and close the sender. In the POLLERR case, that means the receiver wasn't ready
+to receive anything so I think it makes sense to just close it and get the user
+to try again.
+
+default:
+
+poll_handler() only ever returns one of the values in the enum, so this label
+should be unreachable. This means I can use the gcc unreachable builtin and let
+it optimize this label out.
+
+The cleanup label just frees everything and closes the file descriptor before
+closing the sender process.
+
+Weaknesses/Limitations (that have not been expanded upon above) ================
+
+Port numbers:
+
+Not really that much of a weakness, but on the usask network, only port numbers
+between 30000 and 40000 can be used. The user has to give a port to both the
+sender and receiver and will be prompted to try another one if the port given
+doesn't work but it does need to be kept in mind, so it is mentioned in the readme.
+
+Fixed size buffer:
+
+Only messages with contents less than 100 characters can be sent, and the user will
+be prompted to enter a shorter message if they try to input one longer than 100
+characters. I probably could do something with variable length messages but it would
+be considerably more work and is not very important to the core of the assignment.
+This ties in with our assumption that messages will fit in a single UDP frame,
+which they 100% should if 100 characters is the max, but technically I am not making
+full use of the frame.
+
+Integer overflow/wraparound:
+
+If the user tries to send over 2 billion messages, then the sequence number will
+overflow and wraparound to -2 billion. This should never happen realistically, and
+Derek also said it doesn't matter and we can just use a signed 32 bit integer.
