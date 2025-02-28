@@ -1,0 +1,38 @@
+Alexei Doell cka067 11345642
+
+Problem Statement ==============================================================
+
+I need to create a simulation of a poisoned reverse DVR protocol using UDP 
+sockets. For this, I will have one program that sends its distance information
+to its neighbors every two seconds along with a print out to the terminal. As well,
+it will need to wait for routing information from its own neighbors. If it fails
+to receive a message from any neighbors for 5 seconds, it must treat that neighbor
+as having been disconnected (setting distance to infinity).
+
+DVR Plan =======================================================================
+
+For my implementation, I will have two threads. One will handle just printing
+and sending out distance information to neighbors. This thread will sleep for
+2 seconds, print out its routing information, send that information to its
+neighbors, then repeat.
+
+For the other thread, it will need to wait for messages from its neighbors, and
+use that information to calculate distances to routers. Unlike A2, I will try to
+use the Linux io_uring instead of something like poll().
+
+By having this in a separate thread from the two second timer thread, I only need
+to recalculate the five second timeouts, where a timeout t is given by 
+t = 5000ms - ((current time) - (oldest time of last received msg from neighbor)).
+
+This will need to be recalculate right before whenever this thread calls 
+io_uring_submit_and_wait_timeout(), which submits events to the submission queue
+of the io_uring, and then waits for a certain amount of events to complete, or
+until the timeout period completes. For my case, I will just be waiting on only
+a single event to complete, as any time any message is received I need to respond
+by potentially recalculating routing costs.
+
+Whenever a neighbor fails to send a message for 5 seconds, I need to remove it
+from the list of neighbors that are being waited upon. I will still look for a
+message from it, in case it comes back but it should not be a part of the list
+of neighbors that the timeout is calculated by. As well, I need to set the cost
+of the link to this neighbor to infinity which I will be representing with -1.
