@@ -36,3 +36,5 @@ from the list of neighbors that are being waited upon. I will still look for a
 message from it, in case it comes back but it should not be a part of the list
 of neighbors that the timeout is calculated by. As well, I need to set the cost
 of the link to this neighbor to infinity which I will be representing with -1.
+
+kernel timer ???
