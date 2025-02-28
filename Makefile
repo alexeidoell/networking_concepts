@@ -2,12 +2,12 @@
 
 CC = gcc
 CFLAGS = -g -I. 
-CPPFLAGS = -std=gnu99 -Wall -pedantic -Wextra -fPIE
+CPPFLAGS = -std=gnu11 -Wall -Wextra -fPIE
 
 .PHONY: all clean
 
 LISTLIB_SRC = list_adders.c list_movers.c list_removers.c list_alloc.c
-EXECUTABLES = receiver sender
+EXECUTABLES = router
 
 all: $(EXECUTABLES)
 
@@ -46,20 +46,11 @@ $(LIB_DIR)liblist.a : $(OBJ_DIR)list_adders.o $(OBJ_DIR)list_movers.o \
 	$(OBJ_DIR)list_movers.o $(OBJ_DIR)list_removers.o \
 	$(OBJ_DIR)list_alloc.o
 
-$(OBJ_DIR)receiver.o : receiver.c | $(OBJ_DIR)
-	$(CC) -c $(CPPFLAGS) $(CFLAGS) receiver.c -o $(OBJ_DIR)receiver.o
+$(OBJ_DIR)router.o : router.c | $(OBJ_DIR)
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) router.c -o $(OBJ_DIR)router.o
 
-$(BIN_DIR)receiver : $(OBJ_DIR)receiver.o | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)receiver.o -o $(BIN_DIR)receiver
+$(BIN_DIR)router : $(OBJ_DIR)router.o | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)router.o -L. -luring -o $(BIN_DIR)router
 
-$(OBJ_DIR)sender.o : sender.c | $(OBJ_DIR)
-	$(CC) -c $(CPPFLAGS) $(CFLAGS) sender.c -o $(OBJ_DIR)sender.o
-
-$(BIN_DIR)sender : $(OBJ_DIR)sender.o $(LIB_DIR)liblist.a | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIB_DIRS) $(OBJ_DIR)sender.o -llist -o $(BIN_DIR)sender
-
-sender : $(BIN_DIR)sender
-	ln -sf $(BIN_DIR)sender sender
-
-receiver : $(BIN_DIR)receiver
-	ln -sf $(BIN_DIR)receiver receiver
+router : $(BIN_DIR)router
+	ln -sf $(BIN_DIR)router router

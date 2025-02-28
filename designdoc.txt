@@ -20,21 +20,22 @@ For the other thread, it will need to wait for messages from its neighbors, and
 use that information to calculate distances to routers. Unlike A2, I will try to
 use the Linux io_uring instead of something like poll().
 
-By having this in a separate thread from the two second timer thread, I only need
-to recalculate the five second timeouts, where a timeout t is given by 
-t = 5000ms - ((current time) - (oldest time of last received msg from neighbor)).
-
-This will need to be recalculate right before whenever this thread calls 
-io_uring_submit_and_wait_timeout(), which submits events to the submission queue
-of the io_uring, and then waits for a certain amount of events to complete, or
-until the timeout period completes. For my case, I will just be waiting on only
-a single event to complete, as any time any message is received I need to respond
-by potentially recalculating routing costs.
-
 Whenever a neighbor fails to send a message for 5 seconds, I need to remove it
 from the list of neighbors that are being waited upon. I will still look for a
 message from it, in case it comes back but it should not be a part of the list
 of neighbors that the timeout is calculated by. As well, I need to set the cost
 of the link to this neighbor to infinity which I will be representing with -1.
 
-kernel timer ???
+For keeping track of my timers, I will be using POSIX timer fds which can be polled
+on (or put into my io_uring queue).
+
+There will need to be one timer that goes off every 2 seconds, as well as a timer
+associated with each neighbor that goes off every 5 seconds. If a neighbor does
+not send its routing information and the 5 second timer goes off, that timer needs
+to now be ignored or disabled.
+
+io_uring =======================================================================
+
+Due to limitations with io_uring, I will need to use sendmsg and recvmsg as currently
+there is no support for recvfrom.
+

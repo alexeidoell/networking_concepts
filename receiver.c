@@ -6,6 +6,7 @@
 #include <string.h>
 #include <netdb.h>
 #include <linux/io_uring.h>
+#include <liburing.h>
 
 #include <shared.h>
 
