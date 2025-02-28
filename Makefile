@@ -18,7 +18,7 @@ OBJ_DIR = build/obj/
 LIB_DIR = build/lib/
 BIN_DIR = build/bin/
 
-LIB_DIRS = -L$(LIB_DIR)
+LIB_DIRS = -L$(LIB_DIR) -L.
 
 $(BIN_DIR) $(LIB_DIR) $(OBJ_DIR) :
 	mkdir -p $@
@@ -49,8 +49,8 @@ $(LIB_DIR)liblist.a : $(OBJ_DIR)list_adders.o $(OBJ_DIR)list_movers.o \
 $(OBJ_DIR)router.o : router.c | $(OBJ_DIR)
 	$(CC) -c $(CPPFLAGS) $(CFLAGS) router.c -o $(OBJ_DIR)router.o
 
-$(BIN_DIR)router : $(OBJ_DIR)router.o | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)router.o -L. -luring -o $(BIN_DIR)router
+$(BIN_DIR)router : $(OBJ_DIR)router.o $(LIB_DIR)liblist.a | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)router.o $(LIB_DIRS) -luring -llist -o $(BIN_DIR)router
 
 router : $(BIN_DIR)router
 	ln -sf $(BIN_DIR)router router
