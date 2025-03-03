@@ -9,7 +9,7 @@ Kevin Zhang zbk618 11354912
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define LISTMIN 3 
+#define LISTMIN 1
 #define NODEMIN 3
 
 static ListMem g_list_mem;

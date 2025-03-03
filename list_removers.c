@@ -76,15 +76,14 @@ void *ListRemove(LIST *list) {
 void ListFree(LIST *list, int (*itemFree)(void *)) {
     InternalNode* curr_node;
     unsigned long next_node;
-    int i;
     InternalList* internal_list;
     internal_list = getListFromTable((unsigned long)list);
     curr_node = getNodeFromTable((unsigned long)internal_list->head);
-    i = 0;
     if (curr_node != NULL) {
         while (curr_node->next != 0) {
-            i++;
-            itemFree(curr_node->item);
+            if (itemFree != NULL) {
+                itemFree(curr_node->item);
+            }
             if (curr_node->table_entry->index == internal_list->head) {
                 curr_node = getNodeFromTable((unsigned long)curr_node->next);
                 continue;
@@ -93,7 +92,9 @@ void ListFree(LIST *list, int (*itemFree)(void *)) {
             destroyNode(curr_node->prev);
             curr_node = getNodeFromTable(next_node);
         }
-        itemFree(curr_node->item);
+        if (itemFree != NULL) {
+            itemFree(curr_node->item);
+        }
         destroyNode(curr_node->table_entry->index);
     }
     destroyList((unsigned long)list);
