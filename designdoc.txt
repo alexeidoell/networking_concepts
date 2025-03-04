@@ -11,31 +11,652 @@ as having been disconnected (setting distance to infinity).
 
 DVR Plan =======================================================================
 
-For my implementation, I will have two threads. One will handle just printing
-and sending out distance information to neighbors. This thread will sleep for
-2 seconds, print out its routing information, send that information to its
-neighbors, then repeat.
-
-For the other thread, it will need to wait for messages from its neighbors, and
-use that information to calculate distances to routers. Unlike A2, I will try to
-use the Linux io_uring instead of something like poll().
+For DVR, a router must send the info inside its routing table to each of its 
+neighbors. When a router sends out this data, it needs to check each routing
+table entry and see if a route's next hop is the neighbor that is being sent to.
+If this is the case, it needs to advertise the route as infinity (which I will
+be representing with -1) to that neighbor.
 
 Whenever a neighbor fails to send a message for 5 seconds, I need to remove it
 from the list of neighbors that are being waited upon. I will still look for a
 message from it, in case it comes back but it should not be a part of the list
 of neighbors that the timeout is calculated by. As well, I need to set the cost
-of the link to this neighbor to infinity which I will be representing with -1.
-
-For keeping track of my timers, I will be using POSIX timer fds which can be polled
-on (or put into my io_uring queue).
+of the link to this neighbor to infinity.
 
 There will need to be one timer that goes off every 2 seconds, as well as a timer
 associated with each neighbor that goes off every 5 seconds. If a neighbor does
 not send its routing information and the 5 second timer goes off, that timer needs
 to now be ignored or disabled.
 
-io_uring =======================================================================
+For these timers, I will use the built in io_uring timeout requests which act
+similarly to polling a timerfd which I will explain in the io_uring section.
 
-Due to limitations with io_uring, I will need to use sendmsg and recvmsg as currently
+Implementation =================================================================
+
+For my implementation, I will have one thread that runs in a loop waiting on
+io_uring completion events (akin to a loop that waits on poll()). Depending on
+the type of completion event that is given to the process, a different handling
+procedure will be performed. 
+ 
+These event types are:
+ - received a message from a neighbor
+ - a neighbor's timer went off
+ - the global timer went off
+
+ - a message was sent to a neighbor
+ - a timer was rearmed
+
+These first three events need to be handled, but the last two just let you know
+that your submission event finished and will allow you to check the return value.
+
+Received a message:
+
+When the router received a message from a neighbor, it needs to check each entry
+in the table that was sent over. For each entry, if it contains information about
+a router that is not yet known about, it needs to add that router to its list of
+known routers. Otherwise, the router needs to compare the cost given in the message
+against the currently stored cost. 
+
+However, there are a couple of different cases that need to be considered before 
+comparing.
+
+- the current router is the neighbor which sent the current message
+
+In this case, rather than checking against the cost given in the message's routing
+table, we need to check against the neighbors initial cost. If the initial cost is
+lower than the current cost, we set the neighbor's new cost to be its initial cost
+and set its next hop to be itself.
+
+- the current router's next hop is the neighbor which sent the message
+
+This means the currently known route goes through the neighbor that sent us
+the message. In this case, we need to change our stored cost to whatever has been
+sent to us, as the route we are currently using has been changed.
+
+- otherwise
+
+We just compare against the current cost and replace it if the new cost is less
+than the current cost.
+
+As well as handling the data received in the table, we also need to mark the
+neighbor that sent us the message as up and arm its timer if it was down at the
+time of receiving. If the neighbor was not marked as down, we need to reset its
+timer.
+
+Due to limitations with io_uring, I will need to use recvmsg as currently
 there is no support for recvfrom.
+
+Neighbor timer went off:
+
+When a timer associated with a certain neighbor goes off, we mark it as down
+then check all known routers (including the neighbor that just went down). If 
+any router used the neighbor as a next hop, we need to mark its cost as infinite,
+so that a new route can be found for it.
+
+Global timer went off:
+
+This is our timer that goes off every two seconds. When this happens, we need
+to send out our routing table to all neighbors, then print out our routing table.
+This timer does not need to be rearmed, as it is automatically configured to go
+off every two seconds.
+
+List Library ===================================================================
+
+Necessary functions from my 332 list API:
+
+ListCreate() - creates a new list
+
+ListAppend() - adds an item to the tail of the list, and make that item
+the new tail
+
+ListNext() - set the cursor of the list to the next item, and return a pointer
+to that item
+
+ListFirst() - set the cursor of the list to the head, and return a pointer to that
+item
+
+ListCount() - return the number of items in the list
+
+ListFree() - free all the items in the list, then free the memory allocated for
+the list
+
+Code ===========================================================================
+
+Included headers:
+
+- standard library headers:
+ - signal.h - for signal handler functions
+ - stdio.h - for printf
+ - stdlib.h - for strtol
+ - string.h - for memset
+- posix headers:
+ - netdb.h - for all the networking syscalls
+ - unistd.h - for close
+- other:
+ - liburing.h - all io_uring syscalls
+ - list.h - personal list library
+
+Structures/Enums:
+
+union uring_user_data {
+    __u64 casted_data;
+    struct {
+        __s32 type;
+        __s32 port;
+    };
+}
+
+This union is used to pass data into io_uring submission queue entries. For each
+entry, I need to pass in a type of operation, and a port that the operation is
+associated with. The problem is that io_uring only accepts either void* or u64s,
+so in order to pass the information in, I pass in the casted_data field into
+the io_uring_sqe_set_user_data64() function to be accessed later.
+
+struct distance_pair {
+    int32_t id;
+    int32_t cost;
+}
+
+Just a struct to store ids and a cost associated with it, an array of these
+is sent by a router to its neighbors to represent its routing table.
+
+struct netinfo {
+    int32_t id;
+    struct addrinfo* addrinfo;
+}
+
+Struct that associated neighbors with an addrinfo so that we can send to it later.
+
+struct selfinfo {
+    int32_t id;
+    int fd;
+    struct addrinfo* addrinfo;
+}
+
+Similar to the netinfo above, but for storing the router's own network info. We
+need to store an fd as well for the router, unlike the neighbors.
+
+struct router {
+    int32_t id;
+    int32_t cost;
+    int32_t initial_cost;
+    int32_t next_hop;
+    bool down;
+    bool known;
+    bool acknowledged;
+}
+
+Struct that represents the information that needs to be stored for each router.
+The initial_cost and down fields are only necessary for neighbors, but the rest
+are needed for calculations for each router. The acknowledged field is only
+to prevent repeat prints for when the max router count is reached. 
+
+struct msginfo {
+    struct msghdr msghdr;
+    struct iovec iov[1];
+    struct sockaddr_in addr_buffer;
+    struct distance_pair msg_buffer[20];
+    struct cmsghdr control_buffer;
+}
+
+Struct that contains all of the information necessary for a call to recvfrom.
+msghdr contains additional information given from recvfrom (such as port of
+process that sent the message), and the msg_buffer contains the message contents.
+
+Global variables:
+
+static bool running = true
+ - represents a global accessible flag on whether to keep the main loop running
+   which makes propagating an error state globally easy
+static struct selfinfo self
+ - contains network info for the router itself
+static int neighbor_count
+ - number of neighbors given to the router
+static LIST* known_routers
+ - linked list of all known routers
+static struct router all_routers[10001]
+ - array that represents all possible ports that a router can be on in our
+   campus network and allocates them a struct to use (Derek said not to worry
+   about using up a ton of memory, so although it wastes a lot of memory, he 
+   said something like this would be fine)
+static struct netinfo neighbor_info[10]
+ - array that represents each possible neighbor's network info structure
+static struct msginfo msginfo
+ - array that contains all the memory and data structures necessary to use 
+   recvmsg, this struct gets reused for each call to recvfrom
+static struct __kernel_timespec two_sec
+ - timespec that represents a two second interval for use in io_uring timeouts
+static struct __kernel_timespec five_sec
+ - timespec that represents a five second interval for use in io_uring timeouts
+
+Helper functions:
+
+void sig_handler(int sig __attribute__((unused))):
+    running = false
+
+The sig_handler function just sets the running flag to false, so that when the
+main loop is returned to, the loop is exited. In the main function, this function
+is set as the handler for SIGINT so the program can be exited with ctrl-C.
+
+int bind_to(char* port, struct addrinfo** addrinfo):
+
+    getaddrinfo(port, *addrinfo, ...)
+
+    sockfd = socket(*addrinfo)
+
+    bind(sockfd)
+
+    return sockfd
+
+bind_to is just a wrapper around the UDP socket boilerplate function calls, all
+it does it attempt to bind to a socket and check for any errors, before
+returning the file descriptor and storing the addrinfo for the router's socket.
+
+int get_neighbor_netinfo(char* port, struct addrinfo** addr):
+
+    getaddrinfo(port, *addrinfo, ...)
+    if (!*addrinfo):
+        return -1
+
+    return 0
+
+get_neighbor_netinfo is like a simpler version of bind_to that just sets up the
+addrinfo for a neighbor so that the router can send to it later.
+
+void cleanup_network_fds(void):
+
+    for netinfo in neighbor_info:
+        freeaddrinfo(netinfo.addrinfo)
+    freeaddrinfo(self.addrinfo)
+    close(self.fd)
+
+cleanup_network_fds is just a helper function that frees all network info allocated
+for each neighbor as well as the router's addrinfo, along with its fd.
+
+int init_sig_handler(void handler(int)):
+
+    struct sigaction sa;
+    sa.sa_handler = handler;
+    if (sigaction(SIGINT, &sa, NULL) == -1):
+        return -1;
+    return 0;
+
+init_sig_handler just sets up the signal handler for SIGINT so ctrl-C can call
+the sig_handler function above.
+
+void init_msginfo_struct(struct msginfo* msginfo):
+    memset(msginfo, 0, sizeof(msginfo))
+    msginfo->iov[0].iov_base = msginfo->msg_buffer
+    msginfo->iov[0].iov_len = sizeof(msginfo->msg_buffer)
+
+    msginfo->msghdr.msg_iov = msginfo->iov
+    msginfo->msghdr.msg_name = &msginfo->addr_buffer
+    msginfo->msghdr.msg_control = &msginfo->control_buffer
+
+Resets all the values in the msginfo struct to zero, then sets up the fields in
+the msghdr field to point to the correct parts of the msginfo struct.
+
+void print_distance_table(void):
+
+    print(table header)
+    for router in known_routers:
+        print(router.id, router.cost, router.next_hop)
+
+Prints out the routing table for the router. If cost is -1, it will print infinity,
+and if the next_hop is 0, it will print out "-".
+
+void send_to_neighbors(int recvfd, struct io_uring* ring, struct distance_pair msg_buf[]):
+    
+    i = 0
+    for router in known_routers:
+        msg_buf[i].id = router.id
+        i += 1
+
+    for neighbor in neighbor_info
+        sqe = io_uring_get_sqe(ring)
+        if (!sqe):
+            running = false
+            return
+
+        user_data.split_data.type = MSG_SENT
+        user_data.split_data.port = neighbor.id
+        io_uring_sqe_set_user_data64(sqe, user_data)
+
+        for pair in msg_buf:
+            if all_routers[pair.id - 30000].next_hop == neighbor.id:
+                pair.cost = -1
+            else:
+                pair.cost = all_routers[pair.id - 30000].cost
+
+        io_uring_prep_sendto(sqe, recvfd, msg_buf, neighbor.addrinfo)
+        io_uring_submit(ring)
+    
+send_to_neighbors goes through the list of known routers and fills the msg_buffer
+with its info. The first loop gets the id for each known router, and then when
+sending to each neighbor, we get the cost for each router in the msg_buffer by
+checking its next hop. This is where the implementation of poisoned reverse comes
+in. When the next hop of the router in the msg buffer is equal to the neighbor
+that we are currently sending to, we advertise our distance to the router as
+infinity. We use the io_uring_prep_send_to call to set up the sqe with the
+info needed to perform a sendto call. We then immediately call io_uring_submit.
+
+Ideally, we would want to call io_uring_submit as infrequently as possible, as the
+main upside of using io_uring is lessening the amount of syscalls that need to be
+performed, but in this situation we need to immediately call io_uring_submit in
+order to prevent the msg_buffer from being invalidated. The msg_buffer is "locked in"
+when submit is called, not when the prep function is called, so whatever the current
+contents of the msg buffer is when submit is called will be the buffer that is sent.
+
+If the submission queue entry given by the io_uring is invalid, I just treat it
+as a the program failing overall and set the running flag to false. For sending,
+it might make sense to not set it to false, but in most other cases it means the
+entire program falls apart, so for consistency I just set running to false.
+
+void prep_recv_from_neighbors(int recvfd, struct io_uring* ring, struct msginfo *msginfo):
+    
+    sqe = io_uring_get_sqe(ring)
+    if (!sqe):
+        running = false
+        return
+
+    user_data.split_data.type = MSG_RECEIVED
+    user_data.split_data.port = 0
+    io_uring_sqe_set_user_data64(sqe, user_data)
+    io_uring_prep_recvmsg(sqe, recvfd, msginfo->msghdr)
+
+prep_recv_from_neighbors just sets up a io_uring submission queue request for
+receiving from one of the routers neighbors. Here port doesn't matter, because
+we can't know the port of the neighbor that sent the message until after we've
+received it.
+
+void arm_neighbor_timer(struct io_uring* ring, int32_t id):
+    
+    sqe = io_uring_get_sqe(ring)
+    if (!sqe):
+        running = false
+        return
+
+    user_data.split_data.type = NEIGHBOR_TIMEOUT
+    user_data.split_data.port = id
+    io_uring_sqe_set_user_data64(sqe, user_data)
+    io_uring_prep_timeout(sqe, five_sec)
+
+Takes in an id for a neighbor, and arms a five second timer associated with it.
+
+void rearm_neighbor_timer(struct io_uring* ring, int32_t id):
+    
+    sqe = io_uring_get_sqe(ring)
+    if (!sqe):
+        running = false
+        return
+
+    user_data.split_data.type = NEIGHBOR_TIMEOUT
+    user_data.split_data.port = id
+    target_timer.split_data.type = NEIGHBOR_TIMEOUT
+    target_timer.split_data.port = id
+    io_uring_sqe_set_user_data64(sqe, user_data)
+    io_uring_prep_timeout_update(sqe, five_sec, target_timer)
+
+Takes in an id for a neighbor, and resets its timer to five seconds. This gets
+called when a message is successfully received from a neighbor to reset its
+timer.
+
+void prep_neighbor_timers(struct io_uring* ring):
+
+    for neighbor in neighbor_info:
+        sqe = io_uring_get_sqe(ring)
+        if (!sqe):
+            running = false
+            return
+        user_data.split_data.type = NEIGHBOR_TIMEOUT
+        user_data.split_data.port = neighbor.id
+        io_uring_sqe_set_user_data64(sqe, user_data)
+        io_uring_prep_timeout(sqe, five_sec)
+
+This function preps the initial timers for each neighbor, rather than an individual
+neighbor's timer. This gets called before the main loop.
+
+void prep_global_timer(struct io_uring* ring):
+    
+    sqe = io_uring_get_sqe(ring)
+    if (!sqe):
+        running = false
+        return
+
+    user_data.split_data.type = GLOBAL_TIMEOUT
+    user_data.split_data.port = 0
+    io_uring_sqe_set_user_data64(sqe, user_data)
+    io_uring_prep_timeout(sqe, two_sec)
+
+prep_global_timer sets up the timer that goes off every two seconds. Unlike the
+neighbor timers, the IORING_TIMEOUT_MULTISHOT flag is passed into the request which
+makes the timer go off every two seconds without needing to be rearmed.
+
+int uring_init(struct io_uring* ring):
+
+    init_msginfo_struct(msginfo)
+    prep_recv_from_neighbors(self.fd, ring, msginfo)
+    prep_global_timer(ring)
+    prep_neighbor_timers(ring)
+
+    if (io_uring_submit(ring) != neighbor_count + 2):
+        return -1;
+
+    return 0;
+
+Calls each function associated with initializing some sort of request that needs
+to be set up within the io_uring before the main loop begins. The error condition
+can be checked by comparing against neighbor_count + 2 since that we know that
+this is the amount of submission events that should be submit before the main
+loop (one for each neighbor timer, global timer, and receive request).
+
+int network_init(char* args[], int neighbor_count):
+    self.fd = bind_to(args[1], self.addrinfo)
+
+    for neighbor in neighbor_info:
+        port = args[(2 * i) + 2]
+        get_neighbor_netinfo(port, neighbor.addrinfo)
+
+Initializes all info necessary for networking in the process i.e. the router's
+own port fd and addrinfo as well as each neighbor's addrinfo.
+
+void purge_neighbor(int32_t neighbor_id):
+    all_routers[neighbor_id - 30000]->down = true
+
+    for router in known_routers:
+        if router->next_hop == neighbor_id:
+            router->cost = -1
+            router->next_hop = 0
+
+When a neighbor timer goes off, this function will get called. It sets the 
+neighbor's down flag to true, then goes through each known router and marks their
+cost as infinity (i.e. invalidates the route to the router) if their next_hop is
+the neighbor that just went down.
+
+void process_distance_pair(int32_t neighbor, int32_t id, int32_t dw_xy, LIST* list):
+    cost = all_routers[neighbor - 30000].initial_cost + dw_xy
+    curr = all_routers[id - 30000]
+    if (!curr->known):
+        if (ListCount(list) >= MAX_ROUTERS):
+            ignore this router
+        else:
+            curr->id = id
+            if (dw_xy == -1) // infinity
+                curr->cost = -1
+                curr->next_hop = 0
+            else:
+                curr->cost = cost
+                curr->next_hop = neighbor
+            curr->known = true
+            ListAppend(list, curr)
+    else: // router was known
+        if (curr->id == neighbor):
+            if (curr->cost > curr->initial_cost || curr->cost == -1): // re established link with neighbor
+                curr->cost = curr->initial_cost
+                curr->next_hop = neighbor
+        else if (curr->next_hop == neighbor):
+            if (dw_xy != -1):
+                curr->cost = cost
+            else:
+                curr->cost = -1
+                curr->next_hop = 0
+        else: // no route known or route known through different next hop
+            if (dw_xy != -1 && (curr->cost > cost || curr->cost == -1)):
+                curr->next_hop = neighbor
+                curr->cost = cost
+
+This function takes in a neighbor, as well as the info contained in a message
+being sent to the router, then compares against the info already stored. This
+decision tree is explained more properly in the DVR implementation section at the
+top of this document.
+
+void handle_received_data(LIST* list, in32_t neighbor, struct distance_pair msg_buffer[], int len, struct io_uring* ring):
+    
+    if (!all_routers[neighbor - 30000].down):
+        rearm_neighbor_timer(ring, neighbor)
+    else:
+        arm_neighbor_timer(ring, neighbor)
+        all_routers[neighbor - 30000].down = false
+
+    for pair in msg_buffer:
+        process_distance_pair(neighbor, pair.id, pair.cost, list)
+
+handle_received_data iterates over the distance_pairs given in the msg buffer that
+was received and passes it into process_distance_pair to be parsed and processed.
+
+int init_neighbors(LIST* list, char* args[]):
+    self.id = strtol(args[1], NULL, 10);
+    curr = all_routers[id - 30000]
+    curr->id = self.id
+    curr->known = true
+    curr->cost = 0
+    curr->next_hop = 0
+    ListAppend(list, curr)
+
+    for (int i = 0; i < neighbor_count; ++i):
+        id = strtol(args[(2 * i) + 2], NULL, 10)
+        curr->id = id
+        curr->known = true
+        curr->cost = strol(args[(2 * i) + 3], NULL, 10)
+        curr->initial_cost = curr->cost
+        curr->next_hop = curr->id
+        neighbor_info[i].id = curr->id
+        ListAppend(list, curr)
+
+This function just initializes all the router data structures for both the router
+itself as well as all of its neighbors.
+
+Main function:
+    
+    neighbor_count = (argc - 2) / 2
+
+    known_routers = ListCreate()
+    init_neighbors(known_routers, argv)
+
+    io_uring_queue_init(2 + 2 * neighbor_count, ring, 0) // global timer, recv request, one timer and one send request for each neighbor
+
+    network_init(argv, neighbor_count)
+
+    init_sig_handler(sig_handler)
+
+    uring_init(ring)
+
+    send_to_neighbors(self.fd, ring, msg_buf)
+
+    print_distance_table()
+
+    while (running):
+        io_uring_wait_cqe(ring, cqe) // get a completion queue event from the ring
+        user_data = io_uring_cqe_get_data64(cqe)
+        switch (user_data.split_data.type):
+            case MSG_RECEIVED:
+                handle_received_data(known_routers, neighbor_id, msginfo.msg_buffer, size, ring)
+                prep_recv_from_neighbors(self.fd, ring, msginfo)
+                io_uring_submit(ring)
+            case GLOBAL_TIMEOUT:
+                send_to_neighbors(self.fd, ring, msg_buf)
+                print_distance_table()
+            case NEIGHBOR_TIMEOUT:
+                purge_neighbor(user_data.split_data.port)
+            case REARM_TIMER:
+            case MSG_SENT:
+                check for errors
+            default:
+                state that shouldn't happen, so set running to false and exit
+
+cleanup:
+    cleanup_network_fds()
+    io_uring_queue_exit(ring)
+    ListFree(known_routers, NULL)
+
+The main function first initializes all necessary data structures and information
+needed for the program based on the information given to the program as arguments.
+
+Within the main loop, the process first gets a new completion queue event from the
+ring. This will be whatever the oldest completed request to the io_uring is. From
+there we can use the data that has been set within the event to determine how to
+handle the event with the switch statement.
+
+MSG_RECEIVED:
+
+If a message has been received, we need to call handle_received_data() which will
+parse the data within the message and potentially update costs. Afterwards, we
+need to put in a new request to start receiving messages from the neighbors. 
+Unlike the other cases, we then need to call io_uring_submit to put this request
+into the submission queue.
+
+GLOBAL_TIMEOUT:
+
+All the process needs to do in this case is send its routing table to each of
+its neighbors by calling send_to_neighbors() then print out that routing table
+with print_distance_table().
+
+NEIGHBOR_TIMEOUT:
+
+In this case, we just call purge_neighbor() with the id from the user_data to
+mark the link to the router as down.
+
+REARM_TIMER and MSG_SENT:
+
+In these I just check for any errors, but otherwise nothing needs to be done
+to respond to these events.
+
+default:
+
+This case should never happen, as I never put anything into the user data of
+any queue event request other than the enums above. If this happens, I just
+close the process.
+
+Weaknesses/Limitations (that have not been expanded upon above) ================
+
+Port numbers:
+
+Not really that much of a weakness, but on the usask network, only port numbers
+between 30000 and 40000 can be used. The user has to give a port to both the
+sender and receiver and will be prompted to try another one if the port given
+doesn't work but it does need to be kept in mind, so it is mentioned in the readme.
+
+Fixed size buffer:
+
+I only allow a max of 10 routers in the total network topology (Derek encouraged
+doing this) which allows me to have a fixed size message size and I don't need to
+try to peek then allocate space for it. However, this makes the max number of
+routers always the same, and it is significantly less than the amount of memory
+I have set up for all the potential ports. The wasted memory is definitely a 
+weakness but Derek said it did not really matter.
+
+Not storing dw_xy always:
+
+I do not store dw(x,y) for all neighbors w of x, because doing so would make the
+logic of finding a new cost significantly more complicated any time a link goes
+down. This would be O(n^2) because I would need to check all known routers for
+each neighbor. The only real effect this causes is one cycle may not update
+its routes as fast but as soon as another neighbor sends its routing table to
+the current process, these values would be updated and corrected.
+
+Costs as int32_t:
+
+All my link costs are stored as int32_t. This means that potentially there could
+be a situation in which someone attempts to give a link cost greater than 4
+billion and it would not work.
 

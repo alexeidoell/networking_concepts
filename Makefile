@@ -1,7 +1,7 @@
 # Alexei Doell cka067 11345642
 
 CC = gcc
-CFLAGS = -g -I. 
+CFLAGS = -g -I.
 CPPFLAGS = -std=gnu11 -Wall -Wextra -fPIE
 
 .PHONY: all clean
@@ -50,7 +50,7 @@ $(OBJ_DIR)router.o : router.c | $(OBJ_DIR)
 	$(CC) -c $(CPPFLAGS) $(CFLAGS) router.c -o $(OBJ_DIR)router.o
 
 $(BIN_DIR)router : $(OBJ_DIR)router.o $(LIB_DIR)liblist.a | $(BIN_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJ_DIR)router.o $(LIB_DIRS) -luring -llist -o $(BIN_DIR)router
+	$(CC) $(CPPFLAGS) $(CFLAGS) -flto=all $(OBJ_DIR)router.o $(LIB_DIRS) -luring -llist -o $(BIN_DIR)router
 
 router : $(BIN_DIR)router
 	ln -sf $(BIN_DIR)router router

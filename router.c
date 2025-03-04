@@ -11,14 +11,13 @@
 #include <unistd.h>
 
 // io_uring
-#include <linux/io_uring.h>
 #include <liburing.h>
 
 // list lib
 #include <list.h>
 
-#define MAX_NEIGHBORS 19
-#define MAX_ROUTERS 20
+#define MAX_ROUTERS 10
+#define MAX_NEIGHBORS MAX_ROUTERS - 1
 
 static struct __kernel_timespec two_sec = {
     .tv_sec = 2
@@ -49,9 +48,14 @@ struct distance_pair {
     int32_t cost;
 };
 
-struct netinfo {
+struct selfinfo {
     int32_t id;
     int fd;
+    struct addrinfo* addrinfo;
+};
+
+struct netinfo {
+    int32_t id;
     struct addrinfo* addrinfo;
 };
 
@@ -73,9 +77,8 @@ struct msginfo {
     struct cmsghdr control_buffer;
 };
 
-bool running = true;
-static struct netinfo self;
-static int known_router_count = 0;
+static bool running = true;
+static struct selfinfo self;
 static int neighbor_count;
 static LIST* known_routers;
 static struct router all_routers[10001];
@@ -132,9 +135,8 @@ int bind_to(char* port, struct addrinfo** addr) {
     return sockfd;
 }
 
-int get_neighbor_fd(char* port, struct addrinfo** addr) {
-    int sockfd;
-    struct addrinfo hints, *servinfo, *p;
+int get_neighbor_netinfo(char* port, struct addrinfo** addr) {
+    struct addrinfo hints, *servinfo;
     int rv;
 
     memset(&hints, 0, sizeof hints);
@@ -146,33 +148,14 @@ int get_neighbor_fd(char* port, struct addrinfo** addr) {
         return -1;
     }
 
-    // loop through all the results and bind to the first we can
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                        p->ai_protocol)) == -1) {
-            perror("sender: socket");
-            continue;
-        }
-        break;
-    }
+    *addr = servinfo;
 
-    if (p == NULL) {
-        printf("sender: failed to get socket for %s, please "
-                "try another port\n", port);
-        return -1;
-    }
-
-    *addr = p;
-
-    return sockfd;
+    return 0;
 }
 
 void cleanup_network_fds(void) {
     for (int i = 0; i < neighbor_count; ++i) {
         freeaddrinfo(neighbor_info[i].addrinfo);
-        if (neighbor_info[i].fd > 0) {
-            close(neighbor_info[i].fd);
-        }
     }
     freeaddrinfo(self.addrinfo);
     if (self.fd > 0) {
@@ -256,18 +239,18 @@ void send_to_neighbors(int recvfd, struct io_uring* ring, struct distance_pair m
         }
         user_data.split_data.type = MSG_SENT;
         // setting the port is only necessary for better error reporting later
-        user_data.split_data.port = ntohs(((struct sockaddr_in*)neighbor_info[i].addrinfo->ai_addr)->sin_port);
+        user_data.split_data.port = neighbor_info[i].id;
         io_uring_sqe_set_data64(sqe, user_data.casted_data);
         // have to do this stupid o(n^2) method because it has to all be in one
         // single udp segment
-        for (int j = 0; j < known_router_count; ++j) {
+        for (int j = 0; j < ListCount(known_routers); ++j) {
             if (all_routers[ntohl(msg_buf[j].id) - 30000].next_hop == neighbor_info[i].id) {
                 msg_buf[j].cost = htonl(-1);
             } else {
                 msg_buf[j].cost = htonl(all_routers[ntohl(msg_buf[j].id) - 30000].cost);
             }
         }
-        io_uring_prep_sendto(sqe, recvfd, msg_buf, known_router_count * sizeof(struct distance_pair), 0, 
+        io_uring_prep_sendto(sqe, recvfd, msg_buf, ListCount(known_routers) * sizeof(struct distance_pair), 0, 
                 neighbor_info[i].addrinfo->ai_addr, neighbor_info[i].addrinfo->ai_addrlen);
         // need to submit early here, otherwise the io_uring will try to use the same 
         // buffer contents to send, but we need to send different buffer contents
@@ -342,7 +325,7 @@ void prep_neighbor_timers(struct io_uring* ring) {
         user_data.split_data.type = NEIGHBOR_TIMEOUT;
         user_data.split_data.port = neighbor_info[i].id;
         io_uring_sqe_set_data64(sqe, user_data.casted_data);
-        io_uring_prep_timeout(sqe, &five_sec, 0, IORING_TIMEOUT_ETIME_SUCCESS);
+        io_uring_prep_timeout(sqe, &five_sec, 0, 0);
     }
 }
 
@@ -358,7 +341,7 @@ void prep_global_timer(struct io_uring* ring) {
     user_data.split_data.type = GLOBAL_TIMEOUT;
     user_data.split_data.port = 0;
     io_uring_sqe_set_data64(sqe, user_data.casted_data);
-    io_uring_prep_timeout(sqe, &two_sec, 0, IORING_TIMEOUT_MULTISHOT | IORING_TIMEOUT_ETIME_SUCCESS);
+    io_uring_prep_timeout(sqe, &two_sec, 0, IORING_TIMEOUT_MULTISHOT);
 }
 
 int uring_init(struct io_uring* ring) {
@@ -386,9 +369,8 @@ int network_init(char* args[], int neighbor_count) {
     }
     for (int i = 0; i < neighbor_count; ++i) {
         port = args[(2 * i) + 2];
-        neighbor_info[i].fd = get_neighbor_fd(port, &neighbor_info[i].addrinfo);
-        if (neighbor_info[i].fd <= 0) {
-            printf("router %d: failed to bind to neighbor %s\n", self.id, port);
+        if(get_neighbor_netinfo(port, &neighbor_info[i].addrinfo) < 0) {
+            printf("router %d: failed to getaddrinfo for neighbor %s\n", self.id, port);
             return -1;
         }
     }
@@ -408,70 +390,69 @@ void purge_neighbor(int32_t neighbor_id) {
     }
 }
 
+void process_distance_pair(int32_t neighbor, int32_t id, int32_t dw_xy, LIST* list) {
+    int32_t cost = all_routers[neighbor - 30000].initial_cost + dw_xy;
+    struct router* curr = &all_routers[id - 30000];
+    if (!curr->known) {
+        if (ListCount(list) >= MAX_ROUTERS) {
+            if (!curr->acknowledged) {
+                printf("received information about router %d,\
+                        however max router count has been reached so ignoring info\n", id);
+                curr->acknowledged = true;
+            }
+        } else {
+            curr->id = id;
+            if (dw_xy == -1) {
+                curr->cost = -1;
+                curr->next_hop = 0;
+            } else {
+                curr->cost = cost;
+                curr->next_hop = neighbor;
+            }
+            curr->known = true;
+            ListAppend(list, curr);
+        }
+    } else {
+        if (curr->id == neighbor) { // info about neighbor itself
+            if (curr->cost > curr->initial_cost || curr->cost == -1) {
+                curr->cost = curr->initial_cost;
+                curr->next_hop = neighbor;
+            }
+        } else if (curr->next_hop == neighbor) { // route known through this router already
+            if (dw_xy != -1) {
+                curr->cost = cost;
+            } else {
+                curr->cost = -1;
+                curr->next_hop = 0;
+            }
+        } else { // no route currently known or route known through a different next hop
+            if (dw_xy != -1 && (curr->cost > cost || curr->cost == -1)) {
+                curr->next_hop = neighbor;
+                curr->cost = cost;
+            }
+        }
+
+    }
+}
+
 void handle_received_data(LIST* list, int32_t neighbor, struct distance_pair msg_buffer[], int len, struct io_uring* ring) {
-    int32_t id, cost, dw_xy;
-    struct router* curr;
+    int32_t id, dw_xy;
 
     if (!all_routers[neighbor - 30000].down) {
         rearm_neighbor_timer(ring, neighbor);
+    } else {
+        arm_neighbor_timer(ring, neighbor);
+        all_routers[neighbor - 30000].down = false;
     }
 
     for (unsigned int i = 0; i < len / sizeof(struct distance_pair); ++i) {
         id = ntohl(msg_buffer[i].id);
-        dw_xy = ntohl(msg_buffer[i].cost);
-
-        cost = all_routers[neighbor - 30000].initial_cost + dw_xy;
-        curr = &all_routers[id - 30000];
-        if (!curr->known) {
-            if (ListCount(list) >= MAX_ROUTERS) {
-                if (!curr->acknowledged) {
-                    printf("received information about router %d,\
-                            however max router count has been reached so ignoring info\n", id);
-                    curr->acknowledged = true;
-                }
-            } else {
-                known_router_count += 1;
-                curr->id = id;
-                if (dw_xy == -1) {
-                    curr->cost = -1;
-                    curr->next_hop = 0;
-                } else {
-                    curr->cost = cost;
-                    curr->next_hop = neighbor;
-                }
-                curr->known = true;
-                ListAppend(list, curr);
-            }
-        } else {
-            if (curr->id == neighbor) { // info about neighbor itself
-                if (curr->down) {
-                    arm_neighbor_timer(ring, neighbor);
-                    curr->down = false;
-                }
-                if (curr->cost > cost || curr->cost == -1) {
-                    curr->cost = curr->initial_cost;
-                    curr->next_hop = neighbor;
-                }
-            } else if (curr->next_hop == 0 && curr->cost == -1) { // no route currently known
-                if (dw_xy != -1) {
-                    curr->next_hop = neighbor;
-                    curr->cost = cost;
-                }
-            } else if (curr->next_hop != neighbor) { // route known through different next hop
-                if (dw_xy != -1 && curr->cost > cost) {
-                    curr->next_hop = neighbor;
-                    curr->cost = cost;
-                }
-            } else if (curr->next_hop == neighbor) { // route known through this router already
-                if (dw_xy != -1) {
-                    curr->cost = cost;
-                } else {
-                    curr->cost = -1;
-                    curr->next_hop = 0;
-                }
-            }
-
+        if (id > 40000 || id < 30000) {
+            printf("router %d: received invalid port %d\n", self.id, id);
+            
         }
+        dw_xy = ntohl(msg_buffer[i].cost);
+        process_distance_pair(neighbor, id, dw_xy, list);
     }
 }
 
@@ -479,27 +460,31 @@ int init_neighbors(LIST* list, char* args[]) {
     struct router* curr;
     int id;
     id = strtol(args[1], NULL, 10);
-    self.id = id;
-    if (id < 30000 || id > 40000) {
+    if (id < 30000 || id > 40000 || id == 0) {
         printf("router: invalid port number %d\n", id);
         return -1;
     }
+    self.id = id;
     curr = &all_routers[id - 30000];
     curr->id = id;
     curr->known = true;
     curr->cost = 0;
-    curr->next_hop = curr->next_hop;
+    curr->next_hop = 0;
     ListAppend(list, curr);
     // initialize all neighbors
     for (int i = 0; i < neighbor_count; ++i) {
         id = strtol(args[(2 * i) + 2], NULL, 10);
-        if (id < 30000 || id > 40000) {
+        if (id < 30000 || id > 40000 || id == 0) {
             printf("router %d: invalid port number %d\n", self.id, id);
             return -1;
         }
         curr = &all_routers[id - 30000];
         curr->id = id;
         curr->cost = strtol(args[(2 * i) + 3], NULL, 10);
+        if (curr->cost == 0) {
+            printf("router %d: invalid link cost %d\n", self.id, curr->cost);
+            return -1;
+        }
         curr->initial_cost = curr->cost;
         curr->known = true;
         curr->next_hop = curr->id;
@@ -509,7 +494,6 @@ int init_neighbors(LIST* list, char* args[]) {
 
     return 0;
 }
-
 
 int main(int argc, char* argv[]) {
 
@@ -532,7 +516,6 @@ int main(int argc, char* argv[]) {
         printf("the minimum allowed number of neighbors for one router is 1\n");
         return -1;
     }
-    known_router_count = neighbor_count + 1;
 
     known_routers = ListCreate();
     if (init_neighbors(known_routers, argv) == -1) {
@@ -542,7 +525,7 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    if (io_uring_queue_init(1 + 2 * neighbor_count, &ring, 0) != 0) {
+    if (io_uring_queue_init(2 + 2 * neighbor_count, &ring, 0) != 0) {
         printf("router %d: failed to init io_uring, exiting\n", self.id);
         ListFree(known_routers, NULL);
         printf("\nrouter %d exiting\n", self.id);
@@ -579,9 +562,9 @@ int main(int argc, char* argv[]) {
                     printf("router %d: receive failed\n", self.id);
                     running = false;
                 } else {
-                    prep_recv_from_neighbors(self.fd, &ring, &msginfo);
                     neighbor_id = ntohs(((struct sockaddr_in*)msginfo.msghdr.msg_name)->sin_port);
                     handle_received_data(known_routers, neighbor_id, msginfo.msg_buffer, size, &ring);
+                    prep_recv_from_neighbors(self.fd, &ring, &msginfo);
                     io_uring_submit(&ring);
                 }
                 break;
