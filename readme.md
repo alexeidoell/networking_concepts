@@ -1,15 +1,17 @@
 Alexei Doell cka067 11345642
 
+# Poisoned reverse simulation using io_uring
+
 After running make, one executable will be placed as a symlink
 in the current directory:
  - router
 
-Router =========================================================================
+## Router
 
 In order to run the receiver, you must give it a port number to connect to, as
 well as ports for each of its neighbors and costs associated with each neighbor. 
 For the usask network, a port between 30000 and 40000 must be chosen for all ports.
-$ ./router <self_port> <other_port_1> <other_cost_1> ... <other_port_n> <other_cost_n> 
+$ ./router <self_port> <other_port\_1> <other_cost\_1> ... <other_port_n> <other_cost_n> 
 
 E.g. "./router 34920 33000 5" will setup the router to bind to port 34920 and
 start sending and receiving from its neighbor on port 33000 associated with a
